@@ -107,8 +107,52 @@ def extract_quoted_name(org):
     return match.group(1).strip().lower() if match else None
 
 
+def is_org_abbreviation(inner_a, inner_b):
+    """Check if one inner name is an abbreviation of the other.
+    E.g., 'УК ГРП' is abbreviation of 'Управляющая компания ГРП'."""
+    words_a = inner_a.split()
+    words_b = inner_b.split()
+
+    # Determine which is shorter
+    if len(words_a) >= len(words_b):
+        short_words, long_words = words_b, words_a
+    else:
+        short_words, long_words = words_a, words_b
+
+    if len(short_words) == 0 or len(long_words) == 0:
+        return False
+    if len(short_words) >= len(long_words):
+        return False
+
+    # Count matching suffix words (e.g., "ГРП" matches in both)
+    shared_suffix = 0
+    for i in range(1, min(len(short_words), len(long_words)) + 1):
+        if short_words[-i].lower() == long_words[-i].lower():
+            shared_suffix += 1
+        else:
+            break
+
+    if shared_suffix == 0:
+        return False
+
+    # Remaining prefix: short should be initials of long
+    remaining_short = short_words[:len(short_words) - shared_suffix]
+    remaining_long = long_words[:len(long_words) - shared_suffix]
+
+    if not remaining_short and not remaining_long:
+        return True
+    if not remaining_short or not remaining_long:
+        return shared_suffix > 0
+
+    # "УК" should match initials of "Управляющая Компания"
+    abbrev = ''.join(remaining_short).upper()
+    long_initials = ''.join(w[0] for w in remaining_long).upper()
+
+    return abbrev == long_initials
+
+
 def group_org_variants(organizations):
-    """Group orgs sharing the same inner «name» into one entity. Keep longest as canonical."""
+    """Group orgs sharing the same or abbreviated inner «name». Keep longest as canonical."""
     groups = []  # [(canonical, [all_variants])]
 
     for org in organizations:
@@ -118,7 +162,10 @@ def group_org_variants(organizations):
         if inner:
             for i, (canonical, variants) in enumerate(groups):
                 existing_inner = extract_quoted_name(canonical)
-                if existing_inner and inner == existing_inner:
+                if existing_inner and (
+                    inner == existing_inner or
+                    is_org_abbreviation(inner, existing_inner)
+                ):
                     matched_idx = i
                     break
 
@@ -132,13 +179,21 @@ def group_org_variants(organizations):
     return groups
 
 
+def split_name_parts(name):
+    """Split name into parts, expanding 'Е.Б.' into separate initials ['Е', 'Б']."""
+    # Insert space between adjacent initials: "Е.Б." -> "Е. Б."
+    expanded = re.sub(r'([А-ЯЁ])\.([А-ЯЁ])', r'\1. \2', name.strip())
+    parts = [p.strip().rstrip('.') for p in expanded.split() if p.strip()]
+    return parts
+
+
 def is_initial_match(name_a, name_b):
     """Check if one name is abbreviated form of the other (e.g. 'Сурова Е.Б.' vs 'Сурова Елена Борисовна')."""
-    parts_a = [p.rstrip('.') for p in name_a.strip().split() if p.strip()]
-    parts_b = [p.rstrip('.') for p in name_b.strip().split() if p.strip()]
+    parts_a = split_name_parts(name_a)
+    parts_b = split_name_parts(name_b)
 
-    has_init_a = any(len(p) <= 2 for p in parts_a[1:]) if len(parts_a) > 1 else False
-    has_init_b = any(len(p) <= 2 for p in parts_b[1:]) if len(parts_b) > 1 else False
+    has_init_a = any(len(p) <= 1 for p in parts_a[1:]) if len(parts_a) > 1 else False
+    has_init_b = any(len(p) <= 1 for p in parts_b[1:]) if len(parts_b) > 1 else False
 
     if has_init_a == has_init_b:
         return False
@@ -155,8 +210,8 @@ def is_initial_match(name_a, name_b):
         return False
 
     for j in range(1, min(len(short_parts), len(long_parts))):
-        init = short_parts[j] if len(short_parts[j]) <= 2 else long_parts[j]
-        full = long_parts[j] if len(short_parts[j]) <= 2 else short_parts[j]
+        init = short_parts[j] if len(short_parts[j]) <= 1 else long_parts[j]
+        full = long_parts[j] if len(short_parts[j]) <= 1 else short_parts[j]
         if len(init) >= 1 and not full.lower().startswith(init[0].lower()):
             return False
 
@@ -192,7 +247,7 @@ def build_name_pattern(name):
     if len(parts) < 2:
         return None
 
-    has_initials = bool(re.search(r'\b[А-ЯЁ]\.', name))
+    has_initials = bool(re.search(r'[А-ЯЁ]\.', name))
 
     if has_initials:
         surname_match = re.match(r'([А-ЯЁа-яё]+)', name)
@@ -202,8 +257,9 @@ def build_name_pattern(name):
         surname = surname_match.group(1)
         stem_len = max(3, len(surname) - 2)
         pat = re.escape(surname[:stem_len]) + '[а-яёА-ЯЁ]{0,4}'
-        for init in initials:
-            pat += r'\s+' + re.escape(init) + r'\.?'
+        # Build initials part: handles "Ю.И." (no space) and "Ю. И." (with space)
+        initials_pat = r'\.?\s*'.join(re.escape(i) for i in initials) + r'\.?'
+        pat += r'\s+' + initials_pat
         return pat
     else:
         regex_parts = []
