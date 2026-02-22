@@ -29,11 +29,7 @@ torch.backends.cudnn.benchmark = True
 # ===============================
 MODEL_PATH = "/models/qwen"
 
-tokenizer = AutoTokenizer.from_pretrained(
-    MODEL_PATH,
-    trust_remote_code=True
-)
-
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_PATH,
     torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
@@ -45,341 +41,458 @@ log("Qwen 2.5-7B-Instruct loaded")
 
 
 # ===============================
+# BLACKLIST: generic legal terms that are NOT entity names
+# ===============================
+GENERIC_TERMS_LOWER = {
+    'общество', 'общества', 'обществу', 'обществом', 'обществе',
+    'стороны', 'сторон', 'сторонам', 'сторонами', 'сторонах',
+    'стороне', 'сторону', 'стороной', 'сторона',
+    'компания', 'компании', 'компанию', 'компанией', 'компаний',
+    'компании группы', 'компания группы', 'компаниям группы',
+    'компаниями группы', 'компаниях группы',
+    'займодавец', 'заемщик', 'займодавца', 'заемщика',
+    'займодавцу', 'заемщику', 'займодавцем', 'заемщиком',
+    'заёмщик', 'заёмщика', 'заёмщику', 'заёмщиком',
+    'регистратор', 'регистратора', 'регистратору', 'регистратором',
+    'дочерние общества', 'дочерних обществ', 'дочерним обществам',
+    'председатель тк', 'секретарь тк',
+    'генеральный директор', 'генерального директора',
+    'единственный акционер', 'единственного акционера',
+    'уполномоченное лицо', 'уполномоченного лица',
+    'компании группа', 'компании группе',
+}
+
+
+# ===============================
 # REGEX PATTERNS FOR RUSSIAN COMPANIES
 # ===============================
-COMPANY_REGEX_PATTERNS = [
-    r'ООО\s*[«\""]([^»\""]+)[»\"""]',
-    r'АО\s*[«\""]([^»\""]+)[»\"""]',
-    r'ПАО\s*[«\""]([^»\""]+)[»\"""]',
-    r'ЗАО\s*[«\""]([^»\""]+)[»\"""]',
-    r'ИП\s+([А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.)',
-    r'ИП\s+([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+)',
-    r'Акционерное\s+общество\s*[«\""]([^»\""]+)[»\"""]',
-    r'Общество\s+с\s+ограниченной\s+ответственностью\s*[«\""]([^»\""]+)[»\"""]',
-    r'Публичное\s+акционерное\s+общество\s*[«\""]([^»\""]+)[»\"""]',
-]
-
-# Full-match patterns (match the entire entity string including prefix)
 COMPANY_FULL_PATTERNS = [
-    r'ООО\s*[«\""][^»\""]+[»\"""]',
-    r'АО\s*[«\""][^»\""]+[»\"""]',
-    r'ПАО\s*[«\""][^»\""]+[»\"""]',
-    r'ЗАО\s*[«\""][^»\""]+[»\"""]',
+    r'ООО\s*[«""][^»""]+[»""]',
+    r'МКАО\s*[«""][^»""]+[»""]',
+    r'АО\s*[«""][^»""]+[»""]',
+    r'ПАО\s*[«""][^»""]+[»""]',
+    r'ЗАО\s*[«""][^»""]+[»""]',
     r'ИП\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.',
     r'ИП\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+',
-    r'Акционерное\s+общество\s*[«\""][^»\""]+[»\"""]',
-    r'Общество\s+с\s+ограниченной\s+ответственностью\s*[«\""][^»\""]+[»\"""]',
-    r'Публичное\s+акционерное\s+общество\s*[«\""][^»\""]+[»\"""]',
+    r'Акционерное\s+общество\s*[«""][^»""]+[»""]',
+    r'Общество\s+с\s+ограниченной\s+ответственностью\s*[«""][^»""]+[»""]',
+    r'Публичное\s+акционерное\s+общество\s*[«""][^»""]+[»""]',
+    r'Международн\w+\s+компани\w+\s+акционерн\w+\s+общества?\s*[«""][^»""]+[»""]',
 ]
+
+
+# ===============================
+# ENTITY VALIDATION
+# ===============================
+def validate_entity(name):
+    """Filter out generic terms, garbage, and invalid entities."""
+    name = name.strip()
+    if len(name) < 3:
+        return False
+    if name.lower() in GENERIC_TERMS_LOWER:
+        return False
+    if ',' in name and '«' in name:
+        return False
+    if name.count('«') > 1:
+        return False
+    return True
+
+
+# ===============================
+# ENTITY GROUPING (dedup variants)
+# ===============================
+def extract_quoted_name(org):
+    """Extract name from inside «...» quotes."""
+    match = re.search(r'[«""]([^»""]+)[»""]', org)
+    return match.group(1).strip().lower() if match else None
+
+
+def group_org_variants(organizations):
+    """Group orgs sharing the same inner «name» into one entity. Keep longest as canonical."""
+    groups = []  # [(canonical, [all_variants])]
+
+    for org in organizations:
+        inner = extract_quoted_name(org)
+        matched_idx = None
+
+        if inner:
+            for i, (canonical, variants) in enumerate(groups):
+                existing_inner = extract_quoted_name(canonical)
+                if existing_inner and inner == existing_inner:
+                    matched_idx = i
+                    break
+
+        if matched_idx is not None:
+            groups[matched_idx][1].append(org)
+            if len(org) > len(groups[matched_idx][0]):
+                groups[matched_idx] = (org, groups[matched_idx][1])
+        else:
+            groups.append((org, [org]))
+
+    return groups
+
+
+def is_initial_match(name_a, name_b):
+    """Check if one name is abbreviated form of the other (e.g. 'Сурова Е.Б.' vs 'Сурова Елена Борисовна')."""
+    parts_a = [p.rstrip('.') for p in name_a.strip().split() if p.strip()]
+    parts_b = [p.rstrip('.') for p in name_b.strip().split() if p.strip()]
+
+    has_init_a = any(len(p) <= 2 for p in parts_a[1:]) if len(parts_a) > 1 else False
+    has_init_b = any(len(p) <= 2 for p in parts_b[1:]) if len(parts_b) > 1 else False
+
+    if has_init_a == has_init_b:
+        return False
+    if has_init_a:
+        short_parts, long_parts = parts_a, parts_b
+    else:
+        short_parts, long_parts = parts_b, parts_a
+
+    if len(short_parts) < 2 or len(long_parts) < 2:
+        return False
+
+    min_cmp = min(len(short_parts[0]), len(long_parts[0]), 4)
+    if short_parts[0][:min_cmp].lower() != long_parts[0][:min_cmp].lower():
+        return False
+
+    for j in range(1, min(len(short_parts), len(long_parts))):
+        init = short_parts[j] if len(short_parts[j]) <= 2 else long_parts[j]
+        full = long_parts[j] if len(short_parts[j]) <= 2 else short_parts[j]
+        if len(init) >= 1 and not full.lower().startswith(init[0].lower()):
+            return False
+
+    return True
+
+
+def group_person_variants(persons):
+    """Group abbreviated and full forms of same person. Keep longest as canonical."""
+    groups = []
+
+    for person in persons:
+        matched_idx = None
+        for i, (canonical, variants) in enumerate(groups):
+            if is_initial_match(person, canonical):
+                matched_idx = i
+                break
+        if matched_idx is not None:
+            groups[matched_idx][1].append(person)
+            if len(person) > len(groups[matched_idx][0]):
+                groups[matched_idx] = (person, groups[matched_idx][1])
+        else:
+            groups.append((person, [person]))
+
+    return groups
+
+
+# ===============================
+# RUSSIAN NAME DECLENSION (stem-based regex)
+# ===============================
+def build_name_pattern(name):
+    """Build regex matching a Russian name in any grammatical case via stem matching."""
+    parts = name.strip().split()
+    if len(parts) < 2:
+        return None
+
+    has_initials = bool(re.search(r'\b[А-ЯЁ]\.', name))
+
+    if has_initials:
+        surname_match = re.match(r'([А-ЯЁа-яё]+)', name)
+        initials = re.findall(r'([А-ЯЁ])\.', name)
+        if not surname_match or not initials:
+            return None
+        surname = surname_match.group(1)
+        stem_len = max(3, len(surname) - 2)
+        pat = re.escape(surname[:stem_len]) + '[а-яёА-ЯЁ]{0,4}'
+        for init in initials:
+            pat += r'\s+' + re.escape(init) + r'\.?'
+        return pat
+    else:
+        regex_parts = []
+        for part in parts:
+            if len(part) < 2:
+                continue
+            stem_len = max(3, len(part) - 2)
+            regex_parts.append(re.escape(part[:stem_len]) + '[а-яёА-ЯЁ]{0,4}')
+        return r'\s+'.join(regex_parts) if regex_parts else None
+
+
+def build_person_patterns(person_groups, mapping):
+    """Build list of (compiled_regex, placeholder) for declined name matching."""
+    patterns = []
+    for canonical, variants in person_groups:
+        placeholder = mapping.get(canonical)
+        if not placeholder:
+            for v in variants:
+                if v in mapping:
+                    placeholder = mapping[v]
+                    break
+        if not placeholder:
+            continue
+
+        seen_patterns = set()
+        for variant in variants:
+            pat = build_name_pattern(variant)
+            if pat and pat not in seen_patterns:
+                seen_patterns.add(pat)
+                full_pat = r'(?<![А-ЯЁа-яё])' + pat + r'(?![А-ЯЁа-яё])'
+                try:
+                    patterns.append((re.compile(full_pat), placeholder))
+                except re.error:
+                    pass
+    return patterns
 
 
 # ===============================
 # CORE FUNCTIONS
 # ===============================
-
 def combine_pages(pages):
-    """Combine all pages into a single text string, preserving page order."""
     sorted_pages = sorted(pages, key=lambda p: p["page"])
     return "\n\n".join(p["text"] for p in sorted_pages)
 
 
 def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=300):
-    """Split text into overlapping chunks based on tokenizer token count."""
     tokens = tokenizer.encode(text, add_special_tokens=False)
     chunks = []
     start = 0
     while start < len(tokens):
         end = min(start + max_tokens, len(tokens))
-        chunk_tokens = tokens[start:end]
-        chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+        chunk_text = tokenizer.decode(tokens[start:end], skip_special_tokens=True)
         chunks.append(chunk_text)
         if end >= len(tokens):
             break
         start += max_tokens - overlap_tokens
-    log(f"Split text into {len(chunks)} chunks ({len(tokens)} total tokens)")
+    log(f"Split into {len(chunks)} chunks ({len(tokens)} tokens)")
     return chunks
 
 
 SYSTEM_PROMPT = """You are a named entity recognition assistant for Russian legal contracts.
 
-Your task: Extract ALL person names and organization names from the provided text.
+Extract ALL person names and organization names from the text.
 
 Rules:
 - Extract FULL names of persons (e.g., "Иванов Иван Иванович")
-- Extract FULL organization names including their legal form (e.g., "ООО «Ромашка»")
-- Include short and full forms of organizations if both appear
-- Do NOT include positions, titles, or roles
-- Do NOT include addresses or dates
-- Output ONLY valid JSON, no explanations
+- Extract abbreviated person names too (e.g., "Шатрова Ю.И.")
+- Extract FULL organization names including legal form (e.g., "ООО «Ромашка»")
+- Do NOT extract generic terms like "Общество", "Стороны", "Компании группы"
+- Do NOT extract positions, titles, addresses, or dates
+- Output ONLY valid JSON
 
 Output format:
 {
-  "persons": ["Person Name 1", "Person Name 2"],
-  "organizations": ["Organization 1", "Organization 2"]
-}
-
-If no entities found, return:
-{
-  "persons": [],
-  "organizations": []
+  "persons": ["Person Name 1"],
+  "organizations": ["Org Name 1"]
 }"""
 
 
 def extract_entities_llm(text_chunk):
-    """Use LLM to extract person and organization entities from a text chunk."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Extract all person and organization names from this Russian legal contract text:\n\n{text_chunk}"}
+        {"role": "user", "content": f"Extract all person and organization names:\n\n{text_chunk}"}
     ]
 
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
-
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-        truncation=True,
-        max_length=8192
-    ).to(model.device)
-
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=8192).to(model.device)
     prompt_len = inputs["input_ids"].shape[1]
 
     with torch.no_grad():
         output = model.generate(
-            **inputs,
-            max_new_tokens=2048,
-            do_sample=False,
-            temperature=1.0,
-            repetition_penalty=1.1
+            **inputs, max_new_tokens=2048,
+            do_sample=False, temperature=1.0, repetition_penalty=1.1
         )
 
-    # Free input tensors immediately
     del inputs
     torch.cuda.empty_cache()
 
-    raw_output = tokenizer.decode(
-        output[0][prompt_len:],
-        skip_special_tokens=True
-    ).strip()
+    raw_output = tokenizer.decode(output[0][prompt_len:], skip_special_tokens=True).strip()
+    del output
+    log(f"LLM raw: {raw_output[:300]}")
 
-    log(f"LLM raw output: {raw_output[:500]}")
-
-    # Parse JSON from output
     try:
-        # Try to find JSON in the output
-        json_match = re.search(r'\{[^{}]*"persons"\s*:\s*\[.*?\]\s*,\s*"organizations"\s*:\s*\[.*?\]\s*\}', raw_output, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-        else:
-            result = json.loads(raw_output)
-
-        persons = result.get("persons", [])
-        organizations = result.get("organizations", [])
-
-        # Clean up: remove empty strings and strip whitespace
-        persons = [p.strip() for p in persons if p and p.strip()]
-        organizations = [o.strip() for o in organizations if o and o.strip()]
-
+        json_match = re.search(
+            r'\{[^{}]*"persons"\s*:\s*\[.*?\]\s*,\s*"organizations"\s*:\s*\[.*?\]\s*\}',
+            raw_output, re.DOTALL
+        )
+        result = json.loads(json_match.group()) if json_match else json.loads(raw_output)
+        persons = [p.strip() for p in result.get("persons", []) if p and p.strip()]
+        organizations = [o.strip() for o in result.get("organizations", []) if o and o.strip()]
         return persons, organizations
-
     except (json.JSONDecodeError, AttributeError) as e:
-        log(f"Failed to parse LLM output: {e}")
+        log(f"Parse failed: {e}")
         return [], []
 
 
 def detect_companies_regex(text):
-    """Detect Russian company names using regex patterns."""
     organizations = []
     for pattern in COMPANY_FULL_PATTERNS:
-        matches = re.findall(pattern, text)
-        for match in matches:
-            clean = match.strip()
+        for match in re.finditer(pattern, text):
+            clean = match.group().strip()
             if clean and clean not in organizations:
                 organizations.append(clean)
-
-    log(f"Regex detected {len(organizations)} organizations")
+    log(f"Regex found {len(organizations)} orgs")
     return organizations
 
 
 def merge_entities(llm_persons, llm_orgs, regex_orgs):
-    """Merge LLM and regex results, deduplicate."""
-    # Deduplicate persons
-    seen_persons = set()
+    """Merge, validate, deduplicate."""
+    seen_p = set()
     persons = []
     for p in llm_persons:
-        normalized = p.strip()
-        if normalized and normalized.lower() not in seen_persons:
-            seen_persons.add(normalized.lower())
-            persons.append(normalized)
+        n = p.strip()
+        if n and n.lower() not in seen_p and validate_entity(n):
+            seen_p.add(n.lower())
+            persons.append(n)
 
-    # Merge and deduplicate organizations
-    all_orgs = llm_orgs + regex_orgs
-    seen_orgs = set()
+    seen_o = set()
     organizations = []
-    for o in all_orgs:
-        normalized = o.strip()
-        if normalized and normalized.lower() not in seen_orgs:
-            seen_orgs.add(normalized.lower())
-            organizations.append(normalized)
+    for o in llm_orgs + regex_orgs:
+        n = o.strip()
+        if n and n.lower() not in seen_o and validate_entity(n):
+            seen_o.add(n.lower())
+            organizations.append(n)
 
-    log(f"Merged entities: {len(persons)} persons, {len(organizations)} organizations")
+    log(f"After validation: {len(persons)} persons, {len(organizations)} orgs")
     return persons, organizations
 
 
-def build_ordered_mapping(full_text, persons, organizations):
-    """Build deterministic mapping based on first appearance order in document."""
-    # Find first occurrence position of each entity
-    person_positions = []
-    for p in persons:
-        pos = full_text.find(p)
-        if pos == -1:
-            # Try case-insensitive search
-            pos = full_text.lower().find(p.lower())
-        if pos == -1:
-            pos = float('inf')
-        person_positions.append((p, pos))
+def build_ordered_mapping(full_text, person_groups, org_groups):
+    """Build deterministic mapping from grouped entities, ordered by first appearance."""
+    def find_earliest(variants):
+        best = float('inf')
+        for v in variants:
+            pos = full_text.find(v)
+            if pos == -1:
+                pos = full_text.lower().find(v.lower())
+            if pos != -1 and pos < best:
+                best = pos
+        return best
 
-    org_positions = []
-    for o in organizations:
-        pos = full_text.find(o)
-        if pos == -1:
-            pos = full_text.lower().find(o.lower())
-        if pos == -1:
-            pos = float('inf')
-        org_positions.append((o, pos))
+    org_positions = [(c, vs, find_earliest(vs)) for c, vs in org_groups]
+    person_positions = [(c, vs, find_earliest(vs)) for c, vs in person_groups]
 
-    # Sort by first appearance
-    person_positions.sort(key=lambda x: x[1])
-    org_positions.sort(key=lambda x: x[1])
+    org_positions.sort(key=lambda x: x[2])
+    person_positions.sort(key=lambda x: x[2])
 
     mapping = {}
+    for idx, (canonical, variants, _) in enumerate(org_positions, 1):
+        placeholder = f"company{idx}"
+        for v in variants:
+            mapping[v] = placeholder
 
-    # Assign company1, company2, etc.
-    for idx, (org, _) in enumerate(org_positions, start=1):
-        mapping[org] = f"company{idx}"
+    for idx, (canonical, variants, _) in enumerate(person_positions, 1):
+        placeholder = f"user{idx}"
+        for v in variants:
+            mapping[v] = placeholder
 
-    # Assign user1, user2, etc.
-    for idx, (person, _) in enumerate(person_positions, start=1):
-        mapping[person] = f"user{idx}"
-
-    log(f"Built mapping with {len(mapping)} entries")
-    for entity, placeholder in mapping.items():
-        log(f"  {entity} -> {placeholder}")
+    log(f"Mapping ({len(mapping)} entries):")
+    shown = set()
+    for entity, ph in mapping.items():
+        if ph not in shown:
+            shown.add(ph)
+            log(f"  {ph} <- {entity}")
 
     return mapping
 
 
-def safe_replace(text, mapping):
-    """Replace entities in text safely, longest match first to avoid partial replacements."""
-    # Sort by length descending to replace longest matches first
+def safe_replace(text, mapping, name_patterns=None):
+    """Replace with Cyrillic word boundaries + declined name patterns."""
     sorted_entities = sorted(mapping.keys(), key=len, reverse=True)
 
     for entity in sorted_entities:
         placeholder = mapping[entity]
-        # Use word-boundary-aware replacement
-        # For Russian text, use a pattern that handles Cyrillic word boundaries
         escaped = re.escape(entity)
-        text = re.sub(escaped, placeholder, text)
+        pattern = r'(?<![А-ЯЁа-яёA-Za-z])' + escaped + r'(?![А-ЯЁа-яёA-Za-z])'
+        text = re.sub(pattern, placeholder, text)
+
+    if name_patterns:
+        for compiled_re, placeholder in name_patterns:
+            text = compiled_re.sub(placeholder, text)
 
     return text
 
 
 def anonymize_document(pages):
-    """Main anonymization pipeline."""
     total_start = time.time()
-    log(f"Processing document with {len(pages)} pages")
+    log(f"Processing {len(pages)} pages")
 
-    # Safety limit
     if len(pages) > 100:
-        return {"error": f"Document too large: {len(pages)} pages (max 100)"}
+        return {"error": f"Too many pages: {len(pages)} (max 100)"}
 
-    # Step 1: Combine all pages into global text
     full_text = combine_pages(pages)
-    log(f"Combined text length: {len(full_text)} chars")
+    log(f"Combined: {len(full_text)} chars")
 
-    # Step 2: Chunk the text for LLM processing
     chunks = chunk_text_with_overlap(full_text)
 
-    # Step 3: Extract entities from each chunk via LLM
-    all_llm_persons = []
-    all_llm_orgs = []
+    all_persons, all_orgs = [], []
     for i, chunk in enumerate(chunks):
-        chunk_start = time.time()
-        log(f"Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
+        t = time.time()
+        log(f"Chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
         persons, orgs = extract_entities_llm(chunk)
-        all_llm_persons.extend(persons)
-        all_llm_orgs.extend(orgs)
-        chunk_time = time.time() - chunk_start
-        log(f"Chunk {i+1} done in {chunk_time:.1f}s — found {len(persons)} persons, {len(orgs)} orgs")
-
-        # Clear CUDA cache between chunks to prevent VRAM fragmentation
+        all_persons.extend(persons)
+        all_orgs.extend(orgs)
+        log(f"Chunk {i+1} done in {time.time()-t:.1f}s — {len(persons)}p {len(orgs)}o")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             gc.collect()
 
-    elapsed = time.time() - total_start
-    log(f"LLM extraction complete in {elapsed:.1f}s — {len(all_llm_persons)} persons, {len(all_llm_orgs)} orgs (before dedup)")
+    log(f"LLM total: {len(all_persons)}p {len(all_orgs)}o (raw)")
 
-    # Step 4: Regex detection on full text
     regex_orgs = detect_companies_regex(full_text)
+    persons, organizations = merge_entities(all_persons, all_orgs, regex_orgs)
 
-    # Step 5: Merge and deduplicate
-    persons, organizations = merge_entities(all_llm_persons, all_llm_orgs, regex_orgs)
+    # Group variants
+    person_groups = group_person_variants(persons)
+    org_groups = group_org_variants(organizations)
+    log(f"Grouped: {len(person_groups)} person groups, {len(org_groups)} org groups")
 
-    # Step 6: Build ordered mapping based on first appearance
-    mapping = build_ordered_mapping(full_text, persons, organizations)
+    mapping = build_ordered_mapping(full_text, person_groups, org_groups)
 
     if not mapping:
-        log("No entities found, returning original document")
+        log("No entities found")
         return {
             "pages": [{"page": p["page"], "text": p["text"]} for p in sorted(pages, key=lambda x: x["page"])],
             "mapping": {}
         }
 
-    # Step 7: Anonymize each page individually using the global mapping
-    anonymized_pages = []
-    sorted_pages = sorted(pages, key=lambda p: p["page"])
-    for page in sorted_pages:
-        anonymized_text = safe_replace(page["text"], mapping)
-        anonymized_pages.append({
-            "page": page["page"],
-            "text": anonymized_text
-        })
+    # Build declension patterns for persons
+    name_patterns = build_person_patterns(person_groups, mapping)
+    log(f"Built {len(name_patterns)} declension patterns")
 
-    total_time = time.time() - total_start
-    log(f"Anonymization complete in {total_time:.1f}s — {len(mapping)} entities replaced across {len(pages)} pages")
-    return {
-        "pages": anonymized_pages,
-        "mapping": mapping
-    }
+    anonymized_pages = []
+    for page in sorted(pages, key=lambda p: p["page"]):
+        anon_text = safe_replace(page["text"], mapping, name_patterns)
+        anonymized_pages.append({"page": page["page"], "text": anon_text})
+
+    # Build clean display mapping (canonical -> placeholder)
+    display_mapping = {}
+    for canonical, variants in org_groups:
+        ph = mapping.get(canonical) or mapping.get(variants[0])
+        if ph:
+            display_mapping[canonical] = ph
+    for canonical, variants in person_groups:
+        ph = mapping.get(canonical) or mapping.get(variants[0])
+        if ph:
+            display_mapping[canonical] = ph
+
+    total = time.time() - total_start
+    log(f"Done in {total:.1f}s — {len(display_mapping)} entities across {len(pages)} pages")
+    return {"pages": anonymized_pages, "mapping": display_mapping}
 
 
 # ===============================
 # RUNPOD HANDLER
 # ===============================
 def handler(event):
-    """RunPod serverless handler for contract anonymization."""
     try:
         pages = event["input"]["pages"]
-
         if not pages or not isinstance(pages, list):
-            return {"error": "Invalid input: 'pages' must be a non-empty list"}
-
-        # Validate page structure
+            return {"error": "'pages' must be a non-empty list"}
         for p in pages:
             if "page" not in p or "text" not in p:
-                return {"error": "Each page must have 'page' (number) and 'text' (string) fields"}
-
-        result = anonymize_document(pages)
-        return result
-
+                return {"error": "Each page needs 'page' and 'text' fields"}
+        return anonymize_document(pages)
     except KeyError as e:
-        return {"error": f"Missing required field: {e}"}
+        return {"error": f"Missing field: {e}"}
     except Exception as e:
-        log(f"Error in handler: {e}")
+        log(f"Error: {e}")
         return {"error": str(e)}
 
 
