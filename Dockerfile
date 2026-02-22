@@ -17,16 +17,16 @@ RUN pip install --no-cache-dir -r /requirements.txt
 RUN python3 -u <<'EOF'
 from huggingface_hub import snapshot_download
 
-print("Downloading Qwen 2.5-7B-Instruct...", flush=True)
+print("Downloading Qwen 2.5-14B-Instruct...", flush=True)
 
 snapshot_download(
-    repo_id="Qwen/Qwen2.5-7B-Instruct",
+    repo_id="Qwen/Qwen2.5-14B-Instruct",
     local_dir="/models/qwen",
     local_dir_use_symlinks=False,
     resume_download=True
 )
 
-print("Qwen 2.5-7B-Instruct download complete", flush=True)
+print("Qwen 2.5-14B-Instruct download complete", flush=True)
 EOF
 
 WORKDIR /app
