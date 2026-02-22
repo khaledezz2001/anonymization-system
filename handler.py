@@ -2,6 +2,8 @@ import runpod
 import torch
 import re
 import json
+import time
+import gc
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -143,6 +145,8 @@ def extract_entities_llm(text_chunk):
         max_length=8192
     ).to(model.device)
 
+    prompt_len = inputs["input_ids"].shape[1]
+
     with torch.no_grad():
         output = model.generate(
             **inputs,
@@ -152,8 +156,12 @@ def extract_entities_llm(text_chunk):
             repetition_penalty=1.1
         )
 
+    # Free input tensors immediately
+    del inputs
+    torch.cuda.empty_cache()
+
     raw_output = tokenizer.decode(
-        output[0][inputs["input_ids"].shape[1]:],
+        output[0][prompt_len:],
         skip_special_tokens=True
     ).strip()
 
@@ -281,7 +289,12 @@ def safe_replace(text, mapping):
 
 def anonymize_document(pages):
     """Main anonymization pipeline."""
+    total_start = time.time()
     log(f"Processing document with {len(pages)} pages")
+
+    # Safety limit
+    if len(pages) > 100:
+        return {"error": f"Document too large: {len(pages)} pages (max 100)"}
 
     # Step 1: Combine all pages into global text
     full_text = combine_pages(pages)
@@ -294,12 +307,21 @@ def anonymize_document(pages):
     all_llm_persons = []
     all_llm_orgs = []
     for i, chunk in enumerate(chunks):
-        log(f"Processing chunk {i+1}/{len(chunks)}")
+        chunk_start = time.time()
+        log(f"Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
         persons, orgs = extract_entities_llm(chunk)
         all_llm_persons.extend(persons)
         all_llm_orgs.extend(orgs)
+        chunk_time = time.time() - chunk_start
+        log(f"Chunk {i+1} done in {chunk_time:.1f}s — found {len(persons)} persons, {len(orgs)} orgs")
 
-    log(f"LLM extracted: {len(all_llm_persons)} persons, {len(all_llm_orgs)} organizations (before dedup)")
+        # Clear CUDA cache between chunks to prevent VRAM fragmentation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
+
+    elapsed = time.time() - total_start
+    log(f"LLM extraction complete in {elapsed:.1f}s — {len(all_llm_persons)} persons, {len(all_llm_orgs)} orgs (before dedup)")
 
     # Step 4: Regex detection on full text
     regex_orgs = detect_companies_regex(full_text)
@@ -327,7 +349,8 @@ def anonymize_document(pages):
             "text": anonymized_text
         })
 
-    log("Anonymization complete")
+    total_time = time.time() - total_start
+    log(f"Anonymization complete in {total_time:.1f}s — {len(mapping)} entities replaced across {len(pages)} pages")
     return {
         "pages": anonymized_pages,
         "mapping": mapping
