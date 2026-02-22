@@ -37,7 +37,7 @@ model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True
 )
 model.eval()
-log("Qwen 2.5-7B-Instruct loaded")
+log("Qwen 2.5-14B-Instruct loaded")
 
 
 # ===============================
