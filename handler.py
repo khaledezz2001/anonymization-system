@@ -563,8 +563,9 @@ def build_ordered_mapping(full_text, person_groups, org_groups):
 
 
 def replace_dates(text):
-    """Replace all date expressions with [DATE1], [DATE2], ... sequentially."""
-    date_map = {}  # normalized_match -> placeholder
+    """Replace all date expressions with [DATE1], [DATE2], ... sequentially.
+    Returns (anonymized_text, date_map) where date_map is {original -> placeholder}."""
+    date_map = {}
     counter = [0]
 
     def _replace(m):
@@ -576,11 +577,12 @@ def replace_dates(text):
 
     for pattern in DATE_PATTERNS:
         text = re.sub(pattern, _replace, text, flags=re.IGNORECASE)
-    return text
+    return text, date_map
 
 
 def replace_addresses(text):
-    """Replace all address expressions with [ADDRESS1], [ADDRESS2], ... sequentially."""
+    """Replace all address expressions with [ADDRESS1], [ADDRESS2], ... sequentially.
+    Returns (anonymized_text, addr_map) where addr_map is {original -> placeholder}."""
     addr_map = {}
     counter = [0]
 
@@ -593,7 +595,7 @@ def replace_addresses(text):
 
     for pattern in ADDRESS_PATTERNS:
         text = re.sub(pattern, _replace, text)
-    return text
+    return text, addr_map
 
 
 def safe_replace(text, mapping, name_patterns=None):
@@ -658,13 +660,19 @@ def anonymize_document(pages):
     log(f"Built {len(name_patterns)} declension patterns")
 
     anonymized_pages = []
+    # Accumulate date/address maps across all pages (dedup by original text)
+    all_date_map = {}
+    all_addr_map = {}
     for page in sorted(pages, key=lambda p: p["page"]):
         anon_text = safe_replace(page["text"], mapping, name_patterns)
-        anon_text = replace_addresses(anon_text)
-        anon_text = replace_dates(anon_text)
+        anon_text, addr_map = replace_addresses(anon_text)
+        anon_text, date_map = replace_dates(anon_text)
+        all_addr_map.update(addr_map)
+        all_date_map.update(date_map)
         anonymized_pages.append({"page": page["page"], "text": anon_text})
 
     # Build clean display mapping (canonical -> placeholder)
+    # Persons & organisations
     display_mapping = {}
     for canonical, variants in org_groups:
         ph = mapping.get(canonical) or mapping.get(variants[0])
@@ -674,6 +682,9 @@ def anonymize_document(pages):
         ph = mapping.get(canonical) or mapping.get(variants[0])
         if ph:
             display_mapping[canonical] = ph
+    # Addresses & dates — add unique placeholders only
+    display_mapping.update({orig: ph for orig, ph in all_addr_map.items()})
+    display_mapping.update({orig: ph for orig, ph in all_date_map.items()})
 
     total = time.time() - total_start
     log(f"Done in {total:.1f}s — {len(display_mapping)} entities across {len(pages)} pages")
