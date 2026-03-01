@@ -413,7 +413,7 @@ def combine_pages(pages):
     return "\n\n".join(p["text"] for p in sorted_pages)
 
 
-def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=300):
+def chunk_text_with_overlap(text, max_tokens=4500, overlap_tokens=200):
     tokens = tokenizer.encode(text, add_special_tokens=False)
     chunks = []
     start = 0
@@ -424,8 +424,13 @@ def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=300):
         if end >= len(tokens):
             break
         start += max_tokens - overlap_tokens
-    log(f"Split into {len(chunks)} chunks ({len(tokens)} tokens)")
+    log(f"Split into {len(chunks)} chunks ({len(tokens)} tokens total)")
     return chunks
+
+
+# Maximum number of LLM NER chunks we allow (safeguard against runpod timeout).
+# 80 chunks × ~4 500 tokens = ~360 000 tokens ≈ 700+ pages.
+MAX_CHUNKS = 80
 
 
 SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assistant for legal and business documents.
@@ -433,30 +438,37 @@ SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assista
 The document may be in ANY language (Russian, English, German, French, Arabic, Chinese, etc.) or a mix of languages.
 You must detect and extract entities regardless of the language they appear in.
 
-Extract ALL person names and ALL organisation names from the text.
+Extract ALL of the following from the text:
+1. Person names
+2. Organisation / company names
+3. Dates (any format: numeric, written, partial)
+4. Addresses / locations (street addresses, cities, postal codes)
 
 Rules:
 - Extract FULL person names in any language and script (e.g. "John Smith", "Иванов Иван Иванович", "张伟", "محمد علي").
 - Extract abbreviated person names too (e.g. "J. Smith", "Шатрова Ю.И.").
 - Extract FULL organisation names including legal form in any language
   (e.g. "ООО «Ромашка»", "Acme Ltd", "GmbH Müller", "Société Générale S.A.").
-- Do NOT extract generic role words like: party, parties, company, borrower, lender, lessor, lessee,
-  contractor, client, agent, director, общество, стороны, компания, заёмщик, or similar terms.
-- Do NOT extract positions, titles, addresses, postal codes, or dates.
+- Extract ALL dates exactly as they appear (e.g. "02.01.1983", "October 31, 2024", "12 января 2023 г.").
+- Extract ALL addresses and locations exactly as they appear
+  (e.g. "123 Main Street, London", "123456, г. Москва, ул. Ленина, д. 5").
+- Do NOT extract generic role words like: party, company, borrower, lender, director, общество, стороны.
 - If a name appears in multiple grammatical forms (e.g. Russian declension), extract every form you see.
 - Output ONLY valid JSON, no explanation text.
 
 Output format:
 {
-  "persons": ["Full Name 1", "Full Name 2"],
-  "organizations": ["Org Name 1", "Org Name 2"]
+  "persons": ["Full Name 1"],
+  "organizations": ["Org Name 1"],
+  "dates": ["02.01.1983", "October 31, 2024"],
+  "addresses": ["123 Main Street, London"]
 }"""
 
 
 def extract_entities_llm(text_chunk):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Extract all person and organization names:\n\n{text_chunk}"}
+        {"role": "user", "content": f"Extract all persons, organizations, dates, and addresses:\n\n{text_chunk}"}
     ]
 
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -474,20 +486,20 @@ def extract_entities_llm(text_chunk):
 
     raw_output = tokenizer.decode(output[0][prompt_len:], skip_special_tokens=True).strip()
     del output
-    log(f"LLM raw: {raw_output[:300]}")
+    log(f"LLM raw: {raw_output[:500]}")
 
     try:
-        json_match = re.search(
-            r'\{[^{}]*"persons"\s*:\s*\[.*?\]\s*,\s*"organizations"\s*:\s*\[.*?\]\s*\}',
-            raw_output, re.DOTALL
-        )
+        # Try to find JSON block in the output
+        json_match = re.search(r'\{[^{}]*"persons"\s*:.*\}', raw_output, re.DOTALL)
         result = json.loads(json_match.group()) if json_match else json.loads(raw_output)
         persons = [p.strip() for p in result.get("persons", []) if p and p.strip()]
         organizations = [o.strip() for o in result.get("organizations", []) if o and o.strip()]
-        return persons, organizations
+        dates = [d.strip() for d in result.get("dates", []) if d and d.strip()]
+        addresses = [a.strip() for a in result.get("addresses", []) if a and a.strip()]
+        return persons, organizations, dates, addresses
     except (json.JSONDecodeError, AttributeError) as e:
         log(f"Parse failed: {e}")
-        return [], []
+        return [], [], [], []
 
 
 def detect_companies_regex(text):
@@ -562,40 +574,60 @@ def build_ordered_mapping(full_text, person_groups, org_groups):
     return mapping
 
 
-def replace_dates(text):
-    """Replace all date expressions with [DATE1], [DATE2], ... sequentially.
-    Returns (anonymized_text, date_map) where date_map is {original -> placeholder}."""
-    date_map = {}
-    counter = [0]
+def detect_dates_regex(text):
+    """Extract all date strings from text using regex patterns."""
+    dates = []
+    seen = set()
+    for pattern in DATE_PATTERNS:
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+            token = m.group().strip()
+            if token and token.lower() not in seen:
+                seen.add(token.lower())
+                dates.append(token)
+    return dates
 
+
+def detect_addresses_regex(text):
+    """Extract all address strings from text using regex patterns."""
+    addresses = []
+    seen = set()
+    for pattern in ADDRESS_PATTERNS:
+        for m in re.finditer(pattern, text):
+            token = m.group().strip()
+            if token and token.lower() not in seen:
+                seen.add(token.lower())
+                addresses.append(token)
+    return addresses
+
+
+def replace_dates(text, shared_map, shared_counter):
+    """Replace date expressions with [DATE1], [DATE2], ... using a shared map/counter.
+    Same date string always gets the same placeholder across all pages."""
     def _replace(m):
         token = m.group().strip()
-        if token not in date_map:
-            counter[0] += 1
-            date_map[token] = f"[DATE{counter[0]}]"
-        return date_map[token]
+        if token not in shared_map:
+            shared_counter[0] += 1
+            shared_map[token] = f"[DATE{shared_counter[0]}]"
+        return shared_map[token]
 
     for pattern in DATE_PATTERNS:
         text = re.sub(pattern, _replace, text, flags=re.IGNORECASE)
-    return text, date_map
+    return text
 
 
-def replace_addresses(text):
-    """Replace all address expressions with [ADDRESS1], [ADDRESS2], ... sequentially.
-    Returns (anonymized_text, addr_map) where addr_map is {original -> placeholder}."""
-    addr_map = {}
-    counter = [0]
-
+def replace_addresses(text, shared_map, shared_counter):
+    """Replace address expressions with [ADDRESS1], [ADDRESS2], ... using a shared map/counter.
+    Same address string always gets the same placeholder across all pages."""
     def _replace(m):
         token = m.group().strip()
-        if token not in addr_map:
-            counter[0] += 1
-            addr_map[token] = f"[ADDRESS{counter[0]}]"
-        return addr_map[token]
+        if token not in shared_map:
+            shared_counter[0] += 1
+            shared_map[token] = f"[ADDRESS{shared_counter[0]}]"
+        return shared_map[token]
 
     for pattern in ADDRESS_PATTERNS:
         text = re.sub(pattern, _replace, text)
-    return text, addr_map
+    return text
 
 
 def safe_replace(text, mapping, name_patterns=None):
@@ -624,56 +656,115 @@ def anonymize_document(pages):
 
     chunks = chunk_text_with_overlap(full_text)
 
-    all_persons, all_orgs = [], []
+    if len(chunks) > MAX_CHUNKS:
+        return {
+            "error": (
+                f"Document too large: {len(chunks)} chunks required but the maximum is {MAX_CHUNKS}. "
+                f"This corresponds to roughly {MAX_CHUNKS * 4500 // 500} pages. "
+                "Please split the document and process it in parts."
+            )
+        }
+
+    all_persons, all_orgs, all_dates, all_addresses = [], [], [], []
+    ner_start = time.time()
     for i, chunk in enumerate(chunks):
         t = time.time()
         log(f"Chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
-        persons, orgs = extract_entities_llm(chunk)
+        persons, orgs, dates, addresses = extract_entities_llm(chunk)
         all_persons.extend(persons)
         all_orgs.extend(orgs)
-        log(f"Chunk {i+1} done in {time.time()-t:.1f}s — {len(persons)}p {len(orgs)}o")
+        all_dates.extend(dates)
+        all_addresses.extend(addresses)
+        log(f"Chunk {i+1} done in {time.time()-t:.1f}s — {len(persons)}p {len(orgs)}o {len(dates)}d {len(addresses)}a")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             gc.collect()
 
-    log(f"LLM total: {len(all_persons)}p {len(all_orgs)}o (raw)")
+    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a (raw)")
 
+    # ---- Regex fallback: catch anything the LLM missed ----
     regex_orgs = detect_companies_regex(full_text)
+    regex_dates = detect_dates_regex(full_text)
+    regex_addresses = detect_addresses_regex(full_text)
+
     persons, organizations = merge_entities(all_persons, all_orgs, regex_orgs)
 
-    # Group variants
+    # Deduplicate dates (LLM + regex)
+    seen_d = set()
+    unique_dates = []
+    for d in all_dates + regex_dates:
+        d = d.strip()
+        if d and d.lower() not in seen_d:
+            seen_d.add(d.lower())
+            unique_dates.append(d)
+    log(f"Dates: {len(unique_dates)} unique (LLM {len(all_dates)} + regex {len(regex_dates)})")
+
+    # Deduplicate addresses (LLM + regex)
+    seen_a = set()
+    unique_addresses = []
+    for a in all_addresses + regex_addresses:
+        a = a.strip()
+        if a and a.lower() not in seen_a:
+            seen_a.add(a.lower())
+            unique_addresses.append(a)
+    log(f"Addresses: {len(unique_addresses)} unique (LLM {len(all_addresses)} + regex {len(regex_addresses)})")
+
+    # Group variants for persons/orgs
     person_groups = group_person_variants(persons)
     org_groups = group_org_variants(organizations)
     log(f"Grouped: {len(person_groups)} person groups, {len(org_groups)} org groups")
 
     mapping = build_ordered_mapping(full_text, person_groups, org_groups)
 
-    if not mapping:
-        log("No entities found")
-        return {
-            "pages": [{"page": p["page"], "text": p["text"]} for p in sorted(pages, key=lambda x: x["page"])],
-            "mapping": {}
-        }
+    # ---- Build global date & address mappings (numbered by first appearance) ----
+    def find_first_pos(token):
+        pos = full_text.find(token)
+        if pos == -1:
+            pos = full_text.lower().find(token.lower())
+        return pos if pos != -1 else float('inf')
 
-    # Build declension patterns for persons
-    name_patterns = build_person_patterns(person_groups, mapping)
+    # Sort dates/addresses by first appearance in text, assign sequential IDs
+    date_map = {}   # shared across all pages
+    date_counter = [0]
+    sorted_dates = sorted(unique_dates, key=find_first_pos)
+    for d in sorted_dates:
+        date_counter[0] += 1
+        date_map[d] = f"[DATE{date_counter[0]}]"
+
+    addr_map = {}   # shared across all pages
+    addr_counter = [0]
+    sorted_addrs = sorted(unique_addresses, key=find_first_pos)
+    for a in sorted_addrs:
+        addr_counter[0] += 1
+        addr_map[a] = f"[ADDRESS{addr_counter[0]}]"
+
+    log(f"Date mapping: {len(date_map)} entries")
+    for orig, ph in date_map.items():
+        log(f"  {ph} <- {orig}")
+    log(f"Address mapping: {len(addr_map)} entries")
+    for orig, ph in addr_map.items():
+        log(f"  {ph} <- {orig}")
+
+    # ---- Build declension patterns for persons ----
+    name_patterns = build_person_patterns(person_groups, mapping) if mapping else []
     log(f"Built {len(name_patterns)} declension patterns")
 
+    # ---- Replace all entities page by page ----
     anonymized_pages = []
-    # Accumulate date/address maps across all pages (dedup by original text)
-    all_date_map = {}
-    all_addr_map = {}
     for page in sorted(pages, key=lambda p: p["page"]):
-        anon_text = safe_replace(page["text"], mapping, name_patterns)
-        anon_text, addr_map = replace_addresses(anon_text)
-        anon_text, date_map = replace_dates(anon_text)
-        all_addr_map.update(addr_map)
-        all_date_map.update(date_map)
+        anon_text = page["text"]
+        # Replace persons & orgs (LLM-detected)
+        if mapping:
+            anon_text = safe_replace(anon_text, mapping, name_patterns)
+        # Replace addresses (shared map — same addr always gets same placeholder)
+        anon_text = replace_addresses(anon_text, addr_map, addr_counter)
+        # Replace dates (shared map — same date always gets same placeholder)
+        anon_text = replace_dates(anon_text, date_map, date_counter)
         anonymized_pages.append({"page": page["page"], "text": anon_text})
 
-    # Build clean display mapping (canonical -> placeholder)
-    # Persons & organisations
+    # ---- Build clean display mapping ----
     display_mapping = {}
+    # Persons & organisations
     for canonical, variants in org_groups:
         ph = mapping.get(canonical) or mapping.get(variants[0])
         if ph:
@@ -682,9 +773,9 @@ def anonymize_document(pages):
         ph = mapping.get(canonical) or mapping.get(variants[0])
         if ph:
             display_mapping[canonical] = ph
-    # Addresses & dates — add unique placeholders only
-    display_mapping.update({orig: ph for orig, ph in all_addr_map.items()})
-    display_mapping.update({orig: ph for orig, ph in all_date_map.items()})
+    # Addresses & dates
+    display_mapping.update(addr_map)
+    display_mapping.update(date_map)
 
     total = time.time() - total_start
     log(f"Done in {total:.1f}s — {len(display_mapping)} entities across {len(pages)} pages")
