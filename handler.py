@@ -62,16 +62,35 @@ GENERIC_TERMS_LOWER = {
     'единственный акционер', 'единственного акционера',
     'уполномоченное лицо', 'уполномоченного лица',
     'компании группа', 'компании группе',
-    # English generic terms
+    # English generic terms — roles, titles, legal terms
     'company', 'companies', 'the company', 'the companies',
     'party', 'parties', 'the party', 'the parties',
     'borrower', 'lender', 'lessor', 'lessee', 'tenant', 'landlord',
     'client', 'contractor', 'counterparty', 'agent', 'principal',
     'employer', 'employee', 'vendor', 'buyer', 'seller', 'purchaser',
     'assignor', 'assignee', 'guarantor', 'beneficiary',
-    'director', 'general director', 'ceo', 'shareholder',
+    'director', 'directors', 'general director', 'ceo', 'shareholder', 'shareholders',
     'authorized person', 'representative', 'signatory',
     'group company', 'group companies', 'subsidiary', 'subsidiaries',
+    # Titles & positions
+    'chairman', 'secretary', 'treasurer', 'president', 'vice president',
+    'manager', 'administrator', 'auditor', 'inspector', 'officer',
+    'member', 'members', 'board', 'board of directors', 'committee',
+    'trustee', 'trustees', 'receiver', 'liquidator', 'executor',
+    'personal representative', 'personal representatives',
+    'curator bonis', 'requisitionists', 'proxy',
+    # Family / relationship words
+    'parent', 'child', 'children', 'spouse', 'husband', 'wife',
+    'brother', 'sister', 'mother', 'father', 'son', 'daughter',
+    'widow', 'widower', 'deceased', 'heir', 'heirs',
+    'remote issue', 'issue',
+    # Government / institutional generic references
+    'registrar of companies', 'ministry', 'court', 'tribunal',
+    'government', 'state', 'republic', 'authority',
+    'board of directors',
+    # Countries and standalone geographic terms (not real entity names)
+    'cyprus', 'belize', 'republic of cyprus', 'united kingdom',
+    'united states', 'germany', 'france', 'spain', 'italy',
 }
 
 
@@ -91,17 +110,13 @@ COMPANY_FULL_PATTERNS = [
     r'Общество\s+с\s+ограниченной\s+ответственностью\s*[«""][^»""]+[»""]',
     r'Публичное\s+акционерное\s+общество\s*[«""][^»""]+[»""]',
     r'Международн\w+\s+компани\w+\s+акционерн\w+\s+общества?\s*[«""][^»""]+[»""]',
-    # ---- English / Anglo-Saxon legal forms ----
-    # "Acme Ltd", "Acme Limited", "Acme LLC", "Acme Inc.", "Acme Corp.", "Acme Co."
-    r'[A-Z][A-Za-z0-9&,\.\s\-]{1,60}?\s+(?:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|Co\.?|Company|PLC|P\.L\.C\.?)(?=\s|[,;\.]|$)',
-    # "The Acme Corporation" / "Acme International" (capitalised multi-word names before comma/period)
-    r'(?:The\s+)?[A-Z][A-Za-z0-9\-]+(?:\s+[A-Z][A-Za-z0-9\-]+){1,5}\s+(?:Group|Holdings|Enterprises|Industries|Services|Solutions|Technologies|Partners|Associates|Consulting|Capital|Finance|Investments)',
-    # ---- European / other legal forms ----
-    # German: GmbH, AG, KG, OHG; French: S.A., S.A.R.L., S.A.S.; Spanish/Italian: S.L., S.p.A., S.r.l.
-    r'[A-ZÀ-Ö][A-Za-zÀ-ÖØ-öø-ÿ0-9&,\.\s\-]{1,60}?\s+(?:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|A\.?S\.?|A/S|Pty\.?\s*Ltd\.?|AB|Oy|ApS)(?=\s|[,;\.]|$)',
+    # ---- English / international legal forms ----
+    # Only match when a PROPER NAME precedes the legal suffix (at least 2 uppercase-starting words)
+    r'[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+\s+(?:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?)(?=\s|[,;\.]|$)',
+    # ---- European legal forms ----
+    r'[A-ZÀ-Ö][A-Za-zÀ-ÖØ-öø-ÿ0-9]+(?:\s+[A-ZÀ-Ö][A-Za-zÀ-ÖØ-öø-ÿ0-9]+)+\s+(?:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|A\.?S\.?|A/S|Pty\.?\s*Ltd\.?|AB|Oy|ApS)(?=\s|[,;\.]|$)',
     # ---- Quoted organisation names (any language) ----
-    # Catches: Organisation «Name», Organization "Name", Firma 'Name'
-    r'[A-ZА-ЯЁ\u4E00-\u9FFF][\w\s\-\.]{0,40}?\s*[«"\u201C][^»"\u201D\n]{2,60}[»"\u201D]',
+    r'[ОООАОПАОЗАОМКАО]\w*\s*[«"“][^»"”\n]{2,60}[»"”]',
 ]
 
 
@@ -122,8 +137,10 @@ _ALL_MONTHS = f'(?:{_EN_MONTHS}|{_RU_MONTHS}|{_RU_MONTHS_NOM}|{_DE_MONTHS}|{_FR_
 DATE_PATTERNS = [
     # ISO: YYYY-MM-DD
     r'\b\d{4}-\d{2}-\d{2}\b',
-    # Numeric with separators: DD.MM.YYYY / DD/MM/YYYY / MM-DD-YYYY etc.
-    r'\b\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}\b',
+    # Numeric with separators: DD.MM.YYYY / DD/MM/YYYY — must have 4-digit year
+    r'\b\d{1,2}[.\/\-]\d{1,2}[.\/\-]\d{4}\b',
+    # Numeric with 2-digit year: DD.MM.YY / DD/MM/YY
+    r'\b\d{1,2}[.\/\-]\d{1,2}[.\/\-]\d{2}\b',
     # "12 January 2023" / "12 января 2023 г." / "12 janvier 2023" / "12 März 2023"
     r'\b\d{1,2}\s+' + _ALL_MONTHS + r'\.?\s+\d{2,4}(?:\s+г(?:ода)?\.?)?\b',
     # "January 12, 2023" / "January 12th, 2023"
@@ -134,8 +151,10 @@ DATE_PATTERNS = [
     r'\bв\s+\d{4}\s+году?\b',
     # "«__» ________ 20__ г." blank-date template lines
     r'«__»\s*_{3,}\s*\d{2,4}\s*(?:г\.?|года)?',
-    # Plain 4-digit year with word-boundary (last resort, after above patterns)
-    r'\b(?:19|20)\d{2}\s+(?:г(?:ода)?|year|año|Jahr|an)\b',
+    # "02 JUL 2010" — DD MON YYYY (3-letter uppercase month)
+    r'\b\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}\b',
+    # "5 octobre 1961" (French months with day & year)
+    r'\b\d{1,2}\s+' + _FR_MONTHS + r'\s+\d{4}\b',
 ]
 
 
@@ -165,8 +184,23 @@ ADDRESS_PATTERNS = [
 # ===============================
 # ENTITY VALIDATION
 # ===============================
+
+# Sentence fragment indicators — if an entity contains these, it's not a real name
+_FRAGMENT_INDICATORS = [
+    'the company', 'of the', 'in the', 'by the', 'to the', 'for the',
+    'at the', 'on the', 'from the', 'with the', 'and the', 'or the',
+    'shall', 'may', 'must', 'will', 'would', 'should', 'could',
+    'provided that', 'subject to', 'pursuant to', 'in accordance',
+    'at all times', 'from time to time', 'at any time',
+    'herein', 'hereof', 'hereto', 'hereby', 'hereunder',
+    'aforesaid', 'aforementioned', 'notwithstanding',
+    'including', 'excluding', 'except',
+    '\n',  # newlines in entity = sentence fragment
+]
+
+
 def validate_entity(name):
-    """Filter out generic terms, garbage, and invalid entities."""
+    """Filter out generic terms, garbage, sentence fragments, and invalid entities."""
     name = name.strip()
     if len(name) < 3:
         return False
@@ -175,6 +209,62 @@ def validate_entity(name):
     if ',' in name and '«' in name:
         return False
     if name.count('«') > 1:
+        return False
+    # Reject entries that are only brackets/dots/punctuation/placeholders
+    cleaned = re.sub(r'[\[\]\.\.\(\)\s_\-]', '', name)
+    if not cleaned or not any(c.isalpha() for c in cleaned):
+        return False
+    # Reject sentence fragments (contain legal boilerplate phrases)
+    name_lower = name.lower()
+    for indicator in _FRAGMENT_INDICATORS:
+        if indicator in name_lower:
+            return False
+    # Reject single-word entries that are common English words (not proper names)
+    # A real person name has at least 2 words; a single-word org must be distinctive
+    words = name.split()
+    if len(words) == 1:
+        # Single word: only accept if it looks like an acronym (all caps, 2+ chars)
+        if not (name.isupper() and len(name) >= 2):
+            return False
+    return True
+
+
+def validate_date(date_str):
+    """Filter out non-date strings that regex/LLM might have wrongly extracted."""
+    date_str = date_str.strip()
+    if len(date_str) < 4:
+        return False
+    # Reject duration phrases: "fourteen days", "six months", "eighteen months"
+    duration_words = {
+        'days', 'day', 'weeks', 'week', 'months', 'month', 'years', 'year',
+        'hours', 'hour', 'minutes', 'minute',
+        'дней', 'недель', 'месяцев', 'лет',
+    }
+    words = date_str.lower().split()
+    if any(w in duration_words for w in words):
+        return False
+    # Reject bare 4-digit year without month context ("2014" alone)
+    if re.fullmatch(r'\d{4}', date_str):
+        return False
+    # Reject bracket-only placeholders
+    if re.fullmatch(r'[\[\]\.\s_]+', date_str):
+        return False
+    # Must contain at least one digit (a real date always has numbers)
+    if not any(c.isdigit() for c in date_str):
+        return False
+    return True
+
+
+def validate_address(addr_str):
+    """Filter out non-address strings."""
+    addr_str = addr_str.strip()
+    if len(addr_str) < 5:
+        return False
+    # Must contain at least one letter
+    if not any(c.isalpha() for c in addr_str):
+        return False
+    # Reject bracket-only placeholders
+    if re.fullmatch(r'[\[\]\.\s_]+', addr_str):
         return False
     return True
 
@@ -436,32 +526,38 @@ MAX_CHUNKS = 80
 SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assistant for legal and business documents.
 
 The document may be in ANY language (Russian, English, German, French, Arabic, Chinese, etc.) or a mix of languages.
-You must detect and extract entities regardless of the language they appear in.
 
 Extract ALL of the following from the text:
-1. Person names
-2. Organisation / company names
-3. Dates (any format: numeric, written, partial)
-4. Addresses / locations (street addresses, cities, postal codes)
+1. Person names (actual human names only)
+2. Organisation / company names (actual registered business names only)
+3. Dates (specific calendar dates only)
+4. Addresses (physical street/postal addresses only)
 
-Rules:
-- Extract FULL person names in any language and script (e.g. "John Smith", "Иванов Иван Иванович", "张伟", "محمد علي").
-- Extract abbreviated person names too (e.g. "J. Smith", "Шатрова Ю.И.").
-- Extract FULL organisation names including legal form in any language
-  (e.g. "ООО «Ромашка»", "Acme Ltd", "GmbH Müller", "Société Générale S.A.").
-- Extract ALL dates exactly as they appear (e.g. "02.01.1983", "October 31, 2024", "12 января 2023 г.").
-- Extract ALL addresses and locations exactly as they appear
-  (e.g. "123 Main Street, London", "123456, г. Москва, ул. Ленина, д. 5").
-- Do NOT extract generic role words like: party, company, borrower, lender, director, общество, стороны.
-- If a name appears in multiple grammatical forms (e.g. Russian declension), extract every form you see.
-- Output ONLY valid JSON, no explanation text.
+CRITICAL RULES — what to extract:
+- PERSONS: Only real human names, like "John Smith", "Иванов Иван Иванович", "Andreas Menelaou"
+- ORGANISATIONS: Only actual named companies/firms, like "UFG Capital Investment Management Ltd", "ООО «Ромашка»"
+- DATES: Only specific calendar dates, like "02.01.1983", "October 31, 2024", "5 octobre 1961", "02 JUL 2010"
+- ADDRESSES: Only physical addresses, like "24A, Parnithos street, Strovolos, 2007, Nicosia, Cyprus"
+
+CRITICAL RULES — what NOT to extract:
+- Do NOT extract role titles as persons: Chairman, Director, Secretary, Administrator, Treasurer, Trustee, Receiver, Liquidator, Proxy, Committee
+- Do NOT extract family words as persons: Parent, Child, Brother, Sister, Spouse, Husband, Wife, Widow, Widower, Deceased, Heir
+- Do NOT extract generic legal terms as organisations: "the Company", "Board of Directors", "Members of the Company", "Registrar of Companies", "General Meeting"
+- Do NOT extract sentence fragments containing "the Company" or similar — only extract the actual registered name
+- Do NOT extract countries or cities alone as organisations: "Cyprus", "Belize", "Republic of Cyprus"
+- Do NOT extract government bodies as organisations: "Ministry of Justice", "Registrar of Companies"
+- Do NOT extract time durations as dates: "fourteen days", "six months", "eighteen months"
+- Do NOT extract bare years as dates: "2014" alone is NOT a date
+- Do NOT extract template placeholders: "[........]" is NOT an entity
+
+Output ONLY valid JSON, no explanation text.
 
 Output format:
 {
-  "persons": ["Full Name 1"],
-  "organizations": ["Org Name 1"],
+  "persons": ["Andreas Menelaou", "Louiza Georgiou"],
+  "organizations": ["UFG Capital Investment Management Ltd"],
   "dates": ["02.01.1983", "October 31, 2024"],
-  "addresses": ["123 Main Street, London"]
+  "addresses": ["24A, Parnithos street, Strovolos, 2007, Nicosia, Cyprus"]
 }"""
 
 
@@ -689,22 +785,22 @@ def anonymize_document(pages):
 
     persons, organizations = merge_entities(all_persons, all_orgs, regex_orgs)
 
-    # Deduplicate dates (LLM + regex)
+    # Deduplicate dates (LLM + regex) with validation
     seen_d = set()
     unique_dates = []
     for d in all_dates + regex_dates:
         d = d.strip()
-        if d and d.lower() not in seen_d:
+        if d and d.lower() not in seen_d and validate_date(d):
             seen_d.add(d.lower())
             unique_dates.append(d)
     log(f"Dates: {len(unique_dates)} unique (LLM {len(all_dates)} + regex {len(regex_dates)})")
 
-    # Deduplicate addresses (LLM + regex)
+    # Deduplicate addresses (LLM + regex) with validation
     seen_a = set()
     unique_addresses = []
     for a in all_addresses + regex_addresses:
         a = a.strip()
-        if a and a.lower() not in seen_a:
+        if a and a.lower() not in seen_a and validate_address(a):
             seen_a.add(a.lower())
             unique_addresses.append(a)
     log(f"Addresses: {len(unique_addresses)} unique (LLM {len(all_addresses)} + regex {len(regex_addresses)})")
