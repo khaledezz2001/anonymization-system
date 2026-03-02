@@ -535,6 +535,8 @@ Extract ALL of the following from the text:
 
 CRITICAL RULES — what to extract:
 - PERSONS: Only real human names, like "John Smith", "Иванов Иван Иванович", "Andreas Menelaou"
+  • Extract person names EVEN when they appear in an official capacity (e.g. "Irene Athanasiadou for Registrar of Companies" → extract "Irene Athanasiadou")
+  • Extract person names that appear as witnesses, signatories, advocates, translators, notaries
 - ORGANISATIONS: Only actual named companies/firms, like "UFG Capital Investment Management Ltd", "ООО «Ромашка»"
 - DATES: Only specific calendar dates, like "02.01.1983", "October 31, 2024", "5 octobre 1961", "02 JUL 2010"
 - ADDRESSES: Only physical addresses, like "24A, Parnithos street, Strovolos, 2007, Nicosia, Cyprus"
@@ -699,45 +701,32 @@ def detect_addresses_regex(text):
     return addresses
 
 
-def replace_dates(text, shared_map, shared_counter):
-    """Replace date expressions with [DATE1], [DATE2], ... using a shared map/counter.
-    Same date string always gets the same placeholder across all pages."""
-    def _replace(m):
-        token = m.group().strip()
-        if token not in shared_map:
-            shared_counter[0] += 1
-            shared_map[token] = f"[DATE{shared_counter[0]}]"
-        return shared_map[token]
-
-    for pattern in DATE_PATTERNS:
-        text = re.sub(pattern, _replace, text, flags=re.IGNORECASE)
+def replace_dates(text, date_map):
+    """Replace dates in text using the pre-built date_map.
+    Replaces longest entries first to prevent partial matches."""
+    for date_str in sorted(date_map.keys(), key=len, reverse=True):
+        text = text.replace(date_str, date_map[date_str])
     return text
 
 
-def replace_addresses(text, shared_map, shared_counter):
-    """Replace address expressions with [ADDRESS1], [ADDRESS2], ... using a shared map/counter.
-    Same address string always gets the same placeholder across all pages."""
-    def _replace(m):
-        token = m.group().strip()
-        if token not in shared_map:
-            shared_counter[0] += 1
-            shared_map[token] = f"[ADDRESS{shared_counter[0]}]"
-        return shared_map[token]
-
-    for pattern in ADDRESS_PATTERNS:
-        text = re.sub(pattern, _replace, text)
+def replace_addresses(text, addr_map):
+    """Replace addresses in text using the pre-built addr_map.
+    Replaces longest entries first to prevent partial matches."""
+    for addr_str in sorted(addr_map.keys(), key=len, reverse=True):
+        text = text.replace(addr_str, addr_map[addr_str])
     return text
 
 
 def safe_replace(text, mapping, name_patterns=None):
-    """Replace with Cyrillic word boundaries + declined name patterns."""
+    """Replace entities with placeholders using case-insensitive matching
+    and Cyrillic-aware word boundaries."""
     sorted_entities = sorted(mapping.keys(), key=len, reverse=True)
 
     for entity in sorted_entities:
         placeholder = mapping[entity]
         escaped = re.escape(entity)
-        pattern = r'(?<![А-ЯЁа-яёA-Za-z])' + escaped + r'(?![А-ЯЁа-яёA-Za-z])'
-        text = re.sub(pattern, placeholder, text)
+        pattern = r'(?<![\u0410-\u042f\u0401\u0430-\u044f\u0451A-Za-z])' + escaped + r'(?![\u0410-\u042f\u0401\u0430-\u044f\u0451A-Za-z])'
+        text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
 
     if name_patterns:
         for compiled_re, placeholder in name_patterns:
@@ -849,19 +838,15 @@ def anonymize_document(pages):
         return pos if pos != -1 else float('inf')
 
     # Sort dates/addresses by first appearance in text, assign sequential IDs
-    date_map = {}   # shared across all pages
-    date_counter = [0]
+    date_map = {}
     sorted_dates = sorted(unique_dates, key=find_first_pos)
-    for d in sorted_dates:
-        date_counter[0] += 1
-        date_map[d] = f"[DATE{date_counter[0]}]"
+    for i, d in enumerate(sorted_dates, 1):
+        date_map[d] = f"[DATE{i}]"
 
-    addr_map = {}   # shared across all pages
-    addr_counter = [0]
+    addr_map = {}
     sorted_addrs = sorted(unique_addresses, key=find_first_pos)
-    for a in sorted_addrs:
-        addr_counter[0] += 1
-        addr_map[a] = f"[ADDRESS{addr_counter[0]}]"
+    for i, a in enumerate(sorted_addrs, 1):
+        addr_map[a] = f"[ADDRESS{i}]"
 
     log(f"Date mapping: {len(date_map)} entries")
     for orig, ph in date_map.items():
@@ -881,10 +866,10 @@ def anonymize_document(pages):
         # Replace persons & orgs (LLM-detected)
         if mapping:
             anon_text = safe_replace(anon_text, mapping, name_patterns)
-        # Replace addresses (shared map — same addr always gets same placeholder)
-        anon_text = replace_addresses(anon_text, addr_map, addr_counter)
-        # Replace dates (shared map — same date always gets same placeholder)
-        anon_text = replace_dates(anon_text, date_map, date_counter)
+        # Replace addresses (longest-first from pre-built map)
+        anon_text = replace_addresses(anon_text, addr_map)
+        # Replace dates (longest-first from pre-built map)
+        anon_text = replace_dates(anon_text, date_map)
         anonymized_pages.append({"page": page["page"], "text": anon_text})
 
     # ---- Build clean display mapping ----
