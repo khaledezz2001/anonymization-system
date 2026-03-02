@@ -701,19 +701,31 @@ def detect_addresses_regex(text):
     return addresses
 
 
+def _flexible_pattern(text_str):
+    """Build a regex pattern from a string where spaces match any whitespace (incl. newlines).
+    This handles entries that appear split across lines in the document."""
+    escaped = re.escape(text_str)
+    # Replace escaped spaces with \s+ so "Strovolos, 2049" matches "Strovolos,\n2049"
+    return escaped.replace(r'\ ', r'\s+')
+
+
 def replace_dates(text, date_map):
     """Replace dates in text using the pre-built date_map.
-    Replaces longest entries first to prevent partial matches."""
+    Replaces longest entries first to prevent partial matches.
+    Whitespace-flexible and case-insensitive."""
     for date_str in sorted(date_map.keys(), key=len, reverse=True):
-        text = text.replace(date_str, date_map[date_str])
+        pattern = _flexible_pattern(date_str)
+        text = re.sub(pattern, date_map[date_str], text, flags=re.IGNORECASE)
     return text
 
 
 def replace_addresses(text, addr_map):
     """Replace addresses in text using the pre-built addr_map.
-    Replaces longest entries first to prevent partial matches."""
+    Replaces longest entries first to prevent partial matches.
+    Whitespace-flexible to handle multi-line addresses."""
     for addr_str in sorted(addr_map.keys(), key=len, reverse=True):
-        text = text.replace(addr_str, addr_map[addr_str])
+        pattern = _flexible_pattern(addr_str)
+        text = re.sub(pattern, addr_map[addr_str], text)
     return text
 
 
