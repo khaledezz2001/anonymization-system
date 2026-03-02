@@ -623,8 +623,11 @@ def merge_entities(llm_persons, llm_orgs, regex_orgs):
     organizations = []
     for o in llm_orgs + regex_orgs:
         n = o.strip()
-        if n and n.lower() not in seen_o and validate_entity(n):
-            seen_o.add(n.lower())
+        # Normalize: strip trailing dots/whitespace for dedup comparison
+        norm = n.rstrip('. ').lower()
+        if n and norm not in seen_o and validate_entity(n):
+            seen_o.add(norm)
+            # If we already have a shorter variant, replace with the longer one
             organizations.append(n)
 
     log(f"After validation: {len(persons)} persons, {len(organizations)} orgs")
@@ -743,6 +746,28 @@ def safe_replace(text, mapping, name_patterns=None):
     return text
 
 
+def dedup_substrings(items):
+    """Remove items that are substrings of a longer item in the list.
+    E.g. ['octobre 1961', '5 octobre 1961'] -> ['5 octobre 1961']
+    """
+    if not items:
+        return items
+    # Sort longest first so we check shorter items against longer ones
+    sorted_items = sorted(items, key=len, reverse=True)
+    result = []
+    for item in sorted_items:
+        item_lower = item.lower()
+        # Check if this item is a substring of any already-accepted (longer) item
+        is_sub = False
+        for accepted in result:
+            if item_lower in accepted.lower():
+                is_sub = True
+                break
+        if not is_sub:
+            result.append(item)
+    return result
+
+
 def anonymize_document(pages):
     total_start = time.time()
     log(f"Processing {len(pages)} pages")
@@ -793,6 +818,8 @@ def anonymize_document(pages):
         if d and d.lower() not in seen_d and validate_date(d):
             seen_d.add(d.lower())
             unique_dates.append(d)
+    # Remove partial dates that are substrings of longer dates
+    unique_dates = dedup_substrings(unique_dates)
     log(f"Dates: {len(unique_dates)} unique (LLM {len(all_dates)} + regex {len(regex_dates)})")
 
     # Deduplicate addresses (LLM + regex) with validation
@@ -803,6 +830,8 @@ def anonymize_document(pages):
         if a and a.lower() not in seen_a and validate_address(a):
             seen_a.add(a.lower())
             unique_addresses.append(a)
+    # Remove partial addresses that are substrings of longer addresses
+    unique_addresses = dedup_substrings(unique_addresses)
     log(f"Addresses: {len(unique_addresses)} unique (LLM {len(all_addresses)} + regex {len(regex_addresses)})")
 
     # Group variants for persons/orgs
