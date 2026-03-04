@@ -110,11 +110,13 @@ COMPANY_FULL_PATTERNS = [
     r'Общество\s+с\s+ограниченной\s+ответственностью\s*[«""][^»""]+[»""]',
     r'Публичное\s+акционерное\s+общество\s*[«""][^»""]+[»""]',
     r'Международн\w+\s+компани\w+\s+акционерн\w+\s+общества?\s*[«""][^»""]+[»""]',
-    # ---- English / international legal forms ----
-    # Only match when a PROPER NAME precedes the legal suffix (at least 2 uppercase-starting words)
-    r'[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+\s+(?:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?)(?=\s|[,;\.]|$)',
+    # ---- English / international legal forms (case-insensitive via re.IGNORECASE) ----
+    r'[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+\s+(?:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?)(?=\s|[,;\.]|$)',
     # ---- European legal forms ----
     r'[A-ZÀ-Ö][A-Za-zÀ-ÖØ-öø-ÿ0-9]+(?:\s+[A-ZÀ-Ö][A-Za-zÀ-ÖØ-öø-ÿ0-9]+)+\s+(?:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|A\.?S\.?|A/S|Pty\.?\s*Ltd\.?|AB|Oy|ApS)(?=\s|[,;\.]|$)',
+    # ---- Greek legal forms ----
+    # ΛΤΔ = Ltd, ΕΠΕ = ООО equivalent, ΑΕ = S.A., ΔΗΜΟΣΙΑ = Public
+    r'[\u0391-\u03a9][\u0391-\u03a9\u03b1-\u03c9\s]+(?:\s+(?:ΛΤΔ\.?|ΕΠΕ\.?|Α\.?Ε\.?|ΔΗΜΟΣΙΑ\s+ΛΤΔ\.?))(?=\s|[,;\.]|$)',
     # ---- Quoted organisation names (any language) ----
     r'[ОООАОПАОЗАОМКАО]\w*\s*[«"“][^»"”\n]{2,60}[»"”]',
 ]
@@ -163,20 +165,17 @@ DATE_PATTERNS = [
 # ===============================
 ADDRESS_PATTERNS = [
     # ---- Russian addresses ----
-    # Full address with 6-digit postal code: "123456, г. Москва, ул. Ленина, д. 5, кв. 10"
     r'\b\d{6},?\s*(?:[гГ](?:ород|\.)\s*[А-ЯЁа-яё\-]+,?\s*)?(?:[а-яёА-ЯЁ][а-яёА-ЯЁ\s\.\-]+,?\s*(?:[дД][.\/]?\s*\d+[а-яёА-ЯЁ]?(?:/\d+)?(?:,?\s*(?:[кК](?:орп)?|[сСтТ](?:тр)?)[.\/]?\s*\d+)?(?:,?\s*(?:[кКqQ]в|офис|оф\.?)\s*\.?\s*\d+)?)?)\b',
-    # Street keyword: ул., пр., пер., бульвар, набережная ...
     r'(?:(?:[уУ]л(?:ица|\.)?|[пП]р(?:оспект|[\.\-])?|[пП]ер(?:еулок|\.)?|[шШ]оссе|[бБ]ульвар|[нН]аб(?:ережная|\.)?|[пП]лощадь|[пП]л\.?|[пП]роезд)\s+[А-ЯЁа-яё][А-ЯЁа-яё\s\-]+,?\s*(?:[дД][.\/]?\s*\d+[а-яё]?(?:/\d+)?)(?:,?\s*(?:[кК](?:орп)?|[сСтТ](?:тр)?)[.\/]?\s*\d+)?(?:,?\s*(?:[кКqQ]в|офис|оф\.?)\s*\.?\s*\d+)?)',
-    # Russian city reference: "г. Москва", "г. Санкт-Петербург"
-    r'\b[гГ]\.\s*[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s*,\s*[а-яёА-ЯЁ][а-яёА-ЯЁ\s\-]+(?:обл(?:асть|\.)?|кра[йя]|респ(?:ублик[аи]|\.)|округ))?\b',
-    # ---- English / international addresses ----
-    # "123 Main Street, London, UK" / "Suite 4B, 10 Downing Street"
-    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Z][A-Za-z\s\.\-]{2,40},?\s*(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:[,\s]+[A-Z][A-Za-z\s\-]+){0,3}',
+    r'\b[гГ]\.\s*[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s*,\s*[а-яёА-ЯЁ][а-яёА-ЯЁ\s\-]+(?:обл(?:асть|\.)?|кра[йя]|респ(?:ублик[аи]|\.)?|округ))?\b',
+    # ---- English / international addresses (case-insensitive via re.IGNORECASE) ----
+    # "123 Main Street, London, UK" / "191 ATHALASSIS AVE., P.O.Box 25525"
+    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z\s\.\-]{2,40},?\s*(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:[,\s]+[A-Za-z][A-Za-z\s\-\.]+){0,3}',
     # UK postcode: "SW1A 2AA", "EC1A 1BB"
     r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
     # US ZIP: "90210" or "90210-1234"
     r'\b\d{5}(?:-\d{4})?\b(?=[,\s])',
-    # Generic: "City, State/Country" pattern with a known keyword
+    # Generic: "City, State/Country" pattern
     r'\b[A-Z][A-Za-z\-]+(?:\s+[A-Z][A-Za-z\-]+)?,?\s+(?:USA|United States|UK|United Kingdom|Germany|France|Spain|Italy|Netherlands|Switzerland|Austria|Belgium|Poland|Czech Republic|China|Japan|UAE|Canada|Australia)\b',
 ]
 
@@ -603,7 +602,7 @@ def extract_entities_llm(text_chunk):
 def detect_companies_regex(text):
     organizations = []
     for pattern in COMPANY_FULL_PATTERNS:
-        for match in re.finditer(pattern, text):
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
             clean = match.group().strip()
             if clean and clean not in organizations:
                 organizations.append(clean)
@@ -693,7 +692,7 @@ def detect_addresses_regex(text):
     addresses = []
     seen = set()
     for pattern in ADDRESS_PATTERNS:
-        for m in re.finditer(pattern, text):
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
             token = m.group().strip()
             if token and token.lower() not in seen:
                 seen.add(token.lower())
@@ -866,6 +865,7 @@ def anonymize_document(pages):
     log(f"Address mapping: {len(addr_map)} entries")
     for orig, ph in addr_map.items():
         log(f"  {ph} <- {orig}")
+
 
     # ---- Build declension patterns for persons ----
     name_patterns = build_person_patterns(person_groups, mapping) if mapping else []
