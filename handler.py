@@ -180,6 +180,17 @@ ADDRESS_PATTERNS = [
 
 
 # ===============================
+# REGEX PATTERNS FOR PHONES
+# ===============================
+PHONE_PATTERNS = [
+    # Match strings starting with TEL, FAX, MOB followed by phone numbers
+    r'(?i:\b(?:tel|fax|phone|mobile|mob|тел|факс)\.?\s*(?:\+[\d\s\-\.()]{7,20}|[\d\s\-\.()]{7,20})\b)',
+    # Match standalone phone numbers with international prefix
+    r'\b\+?\d{1,3}[-.\s]?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b'
+]
+
+
+# ===============================
 # ENTITY VALIDATION
 # ===============================
 
@@ -263,6 +274,15 @@ def validate_address(addr_str):
         return False
     # Reject bracket-only placeholders
     if re.fullmatch(r'[\[\]\.\s_]+', addr_str):
+        return False
+    return True
+
+
+def validate_phone(phone_str):
+    """Filter out non-phone strings."""
+    phone_str = phone_str.strip()
+    digits = re.sub(r'\D', '', phone_str)
+    if len(digits) < 6:
         return False
     return True
 
@@ -530,6 +550,7 @@ Extract ALL of the following from the text:
 2. Organisation / company names (actual registered business names only)
 3. Dates (specific calendar dates only)
 4. Addresses (physical street/postal addresses only)
+5. Phone numbers (phone and fax numbers)
 
 CRITICAL RULES — what to extract:
 - PERSONS: Only real human names, like "John Smith", "Иванов Иван Иванович", "Andreas Menelaou"
@@ -538,6 +559,7 @@ CRITICAL RULES — what to extract:
 - ORGANISATIONS: Only actual named companies/firms, like "UFG Capital Investment Management Ltd", "ООО «Ромашка»"
 - DATES: Only specific calendar dates, like "02.01.1983", "October 31, 2024", "5 octobre 1961", "02 JUL 2010"
 - ADDRESSES: Only physical addresses, like "24A, Parnithos street, Strovolos, 2007, Nicosia, Cyprus"
+- PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
 
 CRITICAL RULES — what NOT to extract:
 - Do NOT extract role titles as persons: Chairman, Director, Secretary, Administrator, Treasurer, Trustee, Receiver, Liquidator, Proxy, Committee
@@ -557,14 +579,15 @@ Output format:
   "persons": ["Andreas Menelaou", "Louiza Georgiou"],
   "organizations": ["UFG Capital Investment Management Ltd"],
   "dates": ["02.01.1983", "October 31, 2024"],
-  "addresses": ["24A, Parnithos street, Strovolos, 2007, Nicosia, Cyprus"]
+  "addresses": ["24A, Parnithos street, Strovolos, 2007, Nicosia, Cyprus"],
+  "phones": ["+357 22 315161", "22314641"]
 }"""
 
 
 def extract_entities_llm(text_chunk):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Extract all persons, organizations, dates, and addresses:\n\n{text_chunk}"}
+        {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, and phones:\n\n{text_chunk}"}
     ]
 
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -592,10 +615,11 @@ def extract_entities_llm(text_chunk):
         organizations = [o.strip() for o in result.get("organizations", []) if o and o.strip()]
         dates = [d.strip() for d in result.get("dates", []) if d and d.strip()]
         addresses = [a.strip() for a in result.get("addresses", []) if a and a.strip()]
-        return persons, organizations, dates, addresses
+        phones = [p.strip() for p in result.get("phones", []) if p and p.strip()]
+        return persons, organizations, dates, addresses, phones
     except (json.JSONDecodeError, AttributeError) as e:
         log(f"Parse failed: {e}")
-        return [], [], [], []
+        return [], [], [], [], []
 
 
 def detect_companies_regex(text):
@@ -699,6 +723,20 @@ def detect_addresses_regex(text):
     return addresses
 
 
+def detect_phones_regex(text):
+    """Extract all phone strings from text using regex patterns."""
+    phones = []
+    seen = set()
+    for pattern in PHONE_PATTERNS:
+        for m in re.finditer(pattern, text):
+            token = m.group().strip()
+            # Ignore if just a date or small number (must have at least 6 digits)
+            if token and token.lower() not in seen and len(re.sub(r'\D', '', token)) >= 6:
+                seen.add(token.lower())
+                phones.append(token)
+    return phones
+
+
 def _flexible_pattern(text_str):
     """Build a regex pattern from a string where spaces match any whitespace (incl. newlines).
     This handles entries that appear split across lines in the document."""
@@ -724,6 +762,15 @@ def replace_addresses(text, addr_map):
     for addr_str in sorted(addr_map.keys(), key=len, reverse=True):
         pattern = _flexible_pattern(addr_str)
         text = re.sub(pattern, addr_map[addr_str], text)
+    return text
+
+
+def replace_phones(text, phone_map):
+    """Replace phones in text using the pre-built phone_map.
+    Replaces longest entries first to prevent partial matches."""
+    for phone_str in sorted(phone_map.keys(), key=len, reverse=True):
+        pattern = _flexible_pattern(phone_str)
+        text = re.sub(pattern, phone_map[phone_str], text)
     return text
 
 
@@ -785,27 +832,29 @@ def anonymize_document(pages):
             )
         }
 
-    all_persons, all_orgs, all_dates, all_addresses = [], [], [], []
+    all_persons, all_orgs, all_dates, all_addresses, all_phones = [], [], [], [], []
     ner_start = time.time()
     for i, chunk in enumerate(chunks):
         t = time.time()
         log(f"Chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
-        persons, orgs, dates, addresses = extract_entities_llm(chunk)
+        persons, orgs, dates, addresses, phones = extract_entities_llm(chunk)
         all_persons.extend(persons)
         all_orgs.extend(orgs)
         all_dates.extend(dates)
         all_addresses.extend(addresses)
-        log(f"Chunk {i+1} done in {time.time()-t:.1f}s — {len(persons)}p {len(orgs)}o {len(dates)}d {len(addresses)}a")
+        all_phones.extend(phones)
+        log(f"Chunk {i+1} done in {time.time()-t:.1f}s — {len(persons)}p {len(orgs)}o {len(dates)}d {len(addresses)}a {len(phones)}ph")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             gc.collect()
 
-    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a (raw)")
+    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a {len(all_phones)}ph (raw)")
 
     # ---- Regex fallback: catch anything the LLM missed ----
     regex_orgs = detect_companies_regex(full_text)
     regex_dates = detect_dates_regex(full_text)
     regex_addresses = detect_addresses_regex(full_text)
+    regex_phones = detect_phones_regex(full_text)
 
     persons, organizations = merge_entities(all_persons, all_orgs, regex_orgs)
 
@@ -833,6 +882,18 @@ def anonymize_document(pages):
     unique_addresses = dedup_substrings(unique_addresses)
     log(f"Addresses: {len(unique_addresses)} unique (LLM {len(all_addresses)} + regex {len(regex_addresses)})")
 
+    # Deduplicate phones (LLM + regex) with validation
+    seen_ph = set()
+    unique_phones = []
+    for ph in all_phones + regex_phones:
+        ph = ph.strip()
+        if ph and ph.lower() not in seen_ph and validate_phone(ph):
+            seen_ph.add(ph.lower())
+            unique_phones.append(ph)
+    # Remove partial phones that are substrings of longer phones
+    unique_phones = dedup_substrings(unique_phones)
+    log(f"Phones: {len(unique_phones)} unique (LLM {len(all_phones)} + regex {len(regex_phones)})")
+
     # Group variants for persons/orgs
     person_groups = group_person_variants(persons)
     org_groups = group_org_variants(organizations)
@@ -858,11 +919,19 @@ def anonymize_document(pages):
     for i, a in enumerate(sorted_addrs, 1):
         addr_map[a] = f"[ADDRESS{i}]"
 
+    phone_map = {}
+    sorted_phones = sorted(unique_phones, key=find_first_pos)
+    for i, p in enumerate(sorted_phones, 1):
+        phone_map[p] = f"[PHONE{i}]"
+
     log(f"Date mapping: {len(date_map)} entries")
     for orig, ph in date_map.items():
         log(f"  {ph} <- {orig}")
     log(f"Address mapping: {len(addr_map)} entries")
     for orig, ph in addr_map.items():
+        log(f"  {ph} <- {orig}")
+    log(f"Phone mapping: {len(phone_map)} entries")
+    for orig, ph in phone_map.items():
         log(f"  {ph} <- {orig}")
 
 
@@ -881,6 +950,8 @@ def anonymize_document(pages):
         anon_text = replace_addresses(anon_text, addr_map)
         # Replace dates (longest-first from pre-built map)
         anon_text = replace_dates(anon_text, date_map)
+        # Replace phones (longest-first from pre-built map)
+        anon_text = replace_phones(anon_text, phone_map)
         anonymized_pages.append({"page": page["page"], "text": anon_text})
 
     # ---- Build clean display mapping ----
@@ -894,9 +965,10 @@ def anonymize_document(pages):
         ph = mapping.get(canonical) or mapping.get(variants[0])
         if ph:
             display_mapping[canonical] = ph
-    # Addresses & dates
+    # Addresses & dates & phones
     display_mapping.update(addr_map)
     display_mapping.update(date_map)
+    display_mapping.update(phone_map)
 
     total = time.time() - total_start
     log(f"Done in {total:.1f}s — {len(display_mapping)} entities across {len(pages)} pages")
