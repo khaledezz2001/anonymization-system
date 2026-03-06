@@ -99,26 +99,25 @@ GENERIC_TERMS_LOWER = {
 # ===============================
 COMPANY_FULL_PATTERNS = [
     # ---- Russian legal forms ----
-    r'ООО\s*[«""][^»""]+[»""]',
-    r'МКАО\s*[«""][^»""]+[»""]',
-    r'АО\s*[«""][^»""]+[»""]',
-    r'ПАО\s*[«""][^»""]+[»""]',
-    r'ЗАО\s*[«""][^»""]+[»""]',
-    r'ИП\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.',
-    r'ИП\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+',
-    r'Акционерное\s+общество\s*[«""][^»""]+[»""]',
-    r'Общество\s+с\s+ограниченной\s+ответственностью\s*[«""][^»""]+[»""]',
-    r'Публичное\s+акционерное\s+общество\s*[«""][^»""]+[»""]',
-    r'Международн\w+\s+компани\w+\s+акционерн\w+\s+общества?\s*[«""][^»""]+[»""]',
-    # ---- English / international legal forms (case-insensitive via re.IGNORECASE) ----
-    r'[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)+\s+(?:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?)(?=\s|[,;\.]|$)',
+    r'(?i:ООО)\s*[«""][^»""]+[»""]',
+    r'(?i:МКАО)\s*[«""][^»""]+[»""]',
+    r'(?i:АО)\s*[«""][^»""]+[»""]',
+    r'(?i:ПАО)\s*[«""][^»""]+[»""]',
+    r'(?i:ЗАО)\s*[«""][^»""]+[»""]',
+    r'(?i:ИП)\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.',
+    r'(?i:ИП)\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+',
+    r'(?i:Акционерное\s+общество)\s*[«""][^»""]+[»""]',
+    r'(?i:Общество\s+с\s+ограниченной\s+ответственностью)\s*[«""][^»""]+[»""]',
+    r'(?i:Публичное\s+акционерное\s+общество)\s*[«""][^»""]+[»""]',
+    r'(?i:Международн\w+\s+компани\w+\s+акционерн\w+\s+общества?)\s*[«""][^»""]+[»""]',
+    # ---- English / international legal forms ----
+    r'[A-Z0-9][A-Za-z0-9&\'\-\.]+(?:\s+[A-Za-z0-9&\'\-\.]+)*\s+(?i:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?|Public\s+Limited)(?=\s|[,;\.]|$)',
     # ---- European legal forms ----
-    r'[A-ZÀ-Ö][A-Za-zÀ-ÖØ-öø-ÿ0-9]+(?:\s+[A-ZÀ-Ö][A-Za-zÀ-ÖØ-öø-ÿ0-9]+)+\s+(?:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|A\.?S\.?|A/S|Pty\.?\s*Ltd\.?|AB|Oy|ApS)(?=\s|[,;\.]|$)',
+    r'[A-ZÀ-Ö0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ0-9]+)*\s+(?i:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|A\.?S\.?|A/S|Pty\.?\s*Ltd\.?|AB|Oy|ApS)(?=\s|[,;\.]|$)',
     # ---- Greek legal forms ----
-    # ΛΤΔ = Ltd, ΕΠΕ = ООО equivalent, ΑΕ = S.A., ΔΗΜΟΣΙΑ = Public
-    r'[\u0391-\u03a9][\u0391-\u03a9\u03b1-\u03c9\s]+(?:\s+(?:ΛΤΔ\.?|ΕΠΕ\.?|Α\.?Ε\.?|ΔΗΜΟΣΙΑ\s+ΛΤΔ\.?))(?=\s|[,;\.]|$)',
+    r'[\u0391-\u03a9][\u0370-\u03ff]+(?:\s+[\u0370-\u03ff]+)*\s+(?i:ΛΤΔ\.?|ΕΠΕ\.?|Α\.?Ε\.?|ΔΗΜΟΣΙΑ\s+ΛΤΔ\.?)(?=\s|[,;\.]|$)',
     # ---- Quoted organisation names (any language) ----
-    r'[ОООАОПАОЗАОМКАО]\w*\s*[«"“][^»"”\n]{2,60}[»"”]',
+    r'(?i:[ОООАОПАОЗАОМКАО]\w*)\s*[«"“][^»"”\n]{2,60}[»"”]',
 ]
 
 
@@ -170,7 +169,7 @@ ADDRESS_PATTERNS = [
     r'\b[гГ]\.\s*[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s*,\s*[а-яёА-ЯЁ][а-яёА-ЯЁ\s\-]+(?:обл(?:асть|\.)?|кра[йя]|респ(?:ублик[аи]|\.)?|округ))?\b',
     # ---- English / international addresses (case-insensitive via re.IGNORECASE) ----
     # "123 Main Street, London, UK" / "191 ATHALASSIS AVE., P.O.Box 25525"
-    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z\s\.\-]{2,40},?\s*(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:[,\s]+[A-Za-z][A-Za-z\s\-\.]+){0,3}',
+    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z\s\.\-]{2,40},?\s*(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:[,\s]+(?:P\.O\.Box\s*\d+|[A-Za-z][A-Za-z\s\-\.]+)){0,4}(?:[\s\n]+TEL\.?\s*[\d\s\-\.]+(?:,?\s*FAX\.?\s*[\d\s\-\.]+)?)?',
     # UK postcode: "SW1A 2AA", "EC1A 1BB"
     r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
     # US ZIP: "90210" or "90210-1234"
@@ -602,7 +601,7 @@ def extract_entities_llm(text_chunk):
 def detect_companies_regex(text):
     organizations = []
     for pattern in COMPANY_FULL_PATTERNS:
-        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+        for match in re.finditer(pattern, text):
             clean = match.group().strip()
             if clean and clean not in organizations:
                 organizations.append(clean)
