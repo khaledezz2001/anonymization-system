@@ -113,7 +113,7 @@ COMPANY_FULL_PATTERNS = [
     # ---- English / international legal forms ----
     r'[A-Z0-9][A-Za-z0-9&\'\-\.]+(?:\s+[A-Za-z0-9&\'\-\.]+)*\s+(?i:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?|Public\s+Limited)(?=\s|[,;\.]|$)',
     # ---- European legal forms ----
-    r'[A-ZÀ-Ö0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ0-9]+)*\s+(?i:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|A\.?S\.?|A/S|Pty\.?\s*Ltd\.?|AB|Oy|ApS)(?=\s|[,;\.]|$)',
+    r'[A-ZÀ-Ö0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ0-9]+)*\s+(?:(?i:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|Pty\.?\s*Ltd\.?|Oy|ApS)|A\.?S\.?|A/S|AB)(?=\s|[,;\.]|$)',
     # ---- Greek legal forms ----
     r'[\u0391-\u03a9][\u0370-\u03ff]+(?:\s+[\u0370-\u03ff]+)*\s+(?i:ΛΤΔ\.?|ΕΠΕ\.?|Α\.?Ε\.?|ΔΗΜΟΣΙΑ\s+ΛΤΔ\.?)(?=\s|[,;\.]|$)',
     # ---- Quoted organisation names (any language) ----
@@ -169,7 +169,7 @@ ADDRESS_PATTERNS = [
     r'\b[гГ]\.\s*[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s*,\s*[а-яёА-ЯЁ][а-яёА-ЯЁ\s\-]+(?:обл(?:асть|\.)?|кра[йя]|респ(?:ублик[аи]|\.)?|округ))?\b',
     # ---- English / international addresses (case-insensitive via re.IGNORECASE) ----
     # "123 Main Street, London, UK" / "191 ATHALASSIS AVE., P.O.Box 25525"
-    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z\s\.\-]{2,40},?\s*(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:[,\s]+(?:P\.O\.Box\s*\d+|[A-Za-z][A-Za-z\s\-\.]+)){0,4}(?:[\s\n]+TEL\.?\s*[\d\s\-\.]+(?:,?\s*FAX\.?\s*[\d\s\-\.]+)?)?',
+    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z\s\.\-]{2,40},?\s*\b(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)\b(?:\s*[,\s]\s*(?:P\.O\.Box\s*\d+|[A-Za-z][A-Za-z\s\-\.]+)){0,4}(?:[\s\n]+TEL\.?\s*[\d\s\-\.]+(?:,?\s*FAX\.?\s*[\d\s\-\.]+)?)?',
     # UK postcode: "SW1A 2AA", "EC1A 1BB"
     r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
     # US ZIP: "90210" or "90210-1234"
