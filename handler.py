@@ -25,7 +25,7 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 
 # ===============================
-# LOAD QWEN 2.5 7B
+# LOAD QWEN 3 14B
 # ===============================
 MODEL_PATH = "/models/qwen"
 
@@ -37,7 +37,7 @@ model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True
 )
 model.eval()
-log("Qwen 2.5-14B-Instruct loaded")
+log("OpenPipe/Qwen3-14B-Instruct loaded")
 
 
 # ===============================
