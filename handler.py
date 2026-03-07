@@ -168,8 +168,8 @@ ADDRESS_PATTERNS = [
     r'(?:(?:[уУ]л(?:ица|\.)?|[пП]р(?:оспект|[\.\-])?|[пП]ер(?:еулок|\.)?|[шШ]оссе|[бБ]ульвар|[нН]аб(?:ережная|\.)?|[пП]лощадь|[пП]л\.?|[пП]роезд)\s+[А-ЯЁа-яё][А-ЯЁа-яё\s\-]+,?\s*(?:[дД][.\/]?\s*\d+[а-яё]?(?:/\d+)?)(?:,?\s*(?:[кК](?:орп)?|[сСтТ](?:тр)?)[.\/]?\s*\d+)?(?:,?\s*(?:[кКqQ]в|офис|оф\.?)\s*\.?\s*\d+)?)',
     r'\b[гГ]\.\s*[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s*,\s*[а-яёА-ЯЁ][а-яёА-ЯЁ\s\-]+(?:обл(?:асть|\.)?|кра[йя]|респ(?:ублик[аи]|\.)?|округ))?\b',
     # ---- English / international addresses (case-insensitive via re.IGNORECASE) ----
-    # "123 Main Street, London, UK" / "191 ATHALASSIS AVE., P.O.Box 25525"
-    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z\s\.\-]{2,40},?\s*\b(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)\b(?:\s*[,\s]\s*(?:P\.O\.Box\s*\d+|[A-Za-z][A-Za-z\s\-\.]+)){0,4}(?:[\s\n]+TEL\.?\s*[\d\s\-\.]+(?:,?\s*FAX\.?\s*[\d\s\-\.]+)?)?',
+    # "123 Main Street, London, UK" / "191 ATHALASSIS AVE., P.O.Box 25525, LEFKOSIA-CYPRUS"
+    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z \-]{2,40}(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:\s*,\s*(?:P\.O\.?\s*Box\s*\d+|[A-Za-z][A-Za-z \-]*[A-Za-z]))*',
     # UK postcode: "SW1A 2AA", "EC1A 1BB"
     r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
     # US ZIP: "90210" or "90210-1234"
@@ -290,6 +290,30 @@ def validate_phone(phone_str):
 # ===============================
 # ENTITY GROUPING (dedup variants)
 # ===============================
+
+# Legal suffix normalization map (short form → canonical form)
+_LEGAL_SUFFIX_NORMALIZE = [
+    (r'\bLtd\.?\b', 'LIMITED'),
+    (r'\bInc\.?\b', 'INCORPORATED'),
+    (r'\bCorp\.?\b', 'CORPORATION'),
+    (r'\bL\.?L\.?C\.?\b', 'LLC'),
+    (r'\bL\.?L\.?P\.?\b', 'LLP'),
+    (r'\bP\.?L\.?C\.?\b', 'PLC'),
+    (r'\bPty\.?\b', 'PTY'),
+    (r'\bGmbH\b', 'GMBH'),
+]
+
+
+def normalize_org_name(name):
+    """Normalize company name by expanding legal suffix abbreviations.
+    E.g. 'DEMETRA INVESTMENTS PUBLIC LTD' → 'DEMETRA INVESTMENTS PUBLIC LIMITED'
+    Returns the uppercased, suffix-normalized form for comparison."""
+    n = name.strip().rstrip('.')
+    for pattern, replacement in _LEGAL_SUFFIX_NORMALIZE:
+        n = re.sub(pattern, replacement, n, flags=re.IGNORECASE)
+    return n.upper()
+
+
 def extract_quoted_name(org):
     """Extract name from inside «...» quotes."""
     match = re.search(r'[«""]([^»""]+)[»""]', org)
@@ -341,13 +365,17 @@ def is_org_abbreviation(inner_a, inner_b):
 
 
 def group_org_variants(organizations):
-    """Group orgs sharing the same or abbreviated inner «name». Keep longest as canonical."""
+    """Group orgs sharing the same or abbreviated inner «name», or the same
+    suffix-normalized form (e.g. 'X Ltd' and 'X Limited'). Keep longest as canonical."""
     groups = []  # [(canonical, [all_variants])]
+    # Cache normalized names for each group's canonical entry
+    group_norms = []  # parallel list: normalized name for each group's canonical
 
     for org in organizations:
         inner = extract_quoted_name(org)
         matched_idx = None
 
+        # 1. Try matching by quoted inner name
         if inner:
             for i, (canonical, variants) in enumerate(groups):
                 existing_inner = extract_quoted_name(canonical)
@@ -358,12 +386,22 @@ def group_org_variants(organizations):
                     matched_idx = i
                     break
 
+        # 2. Try matching by normalized legal suffix (Ltd vs Limited, etc.)
+        if matched_idx is None:
+            org_norm = normalize_org_name(org)
+            for i, norm in enumerate(group_norms):
+                if org_norm == norm:
+                    matched_idx = i
+                    break
+
         if matched_idx is not None:
             groups[matched_idx][1].append(org)
             if len(org) > len(groups[matched_idx][0]):
                 groups[matched_idx] = (org, groups[matched_idx][1])
+                group_norms[matched_idx] = normalize_org_name(org)
         else:
             groups.append((org, [org]))
+            group_norms.append(normalize_org_name(org))
 
     return groups
 
