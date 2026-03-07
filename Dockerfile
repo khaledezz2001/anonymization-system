@@ -12,21 +12,21 @@ COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
 # ===============================
-# DOWNLOAD QWEN 3 14B INSTRUCT
+# DOWNLOAD Qwen/Qwen3.5-27B
 # ===============================
 RUN python3 -u <<'EOF'
 from huggingface_hub import snapshot_download
 
-print("Downloading OpenPipe/Qwen3-14B-Instruct...", flush=True)
+print("Downloading Qwen/Qwen3.5-27B...", flush=True)
 
 snapshot_download(
-    repo_id="OpenPipe/Qwen3-14B-Instruct",
+    repo_id="Qwen/Qwen3.5-27B",
     local_dir="/models/qwen",
     local_dir_use_symlinks=False,
     resume_download=True
 )
 
-print("OpenPipe/Qwen3-14B-Instruct download complete", flush=True)
+print("Qwen/Qwen3.5-27B download complete", flush=True)
 EOF
 
 WORKDIR /app
