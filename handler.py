@@ -95,33 +95,6 @@ GENERIC_TERMS_LOWER = {
 
 
 # ===============================
-# REGEX PATTERNS FOR COMPANIES (Russian + International)
-# ===============================
-COMPANY_FULL_PATTERNS = [
-    # ---- Russian legal forms ----
-    r'(?i:ООО)\s*[«""][^»""]+[»""]',
-    r'(?i:МКАО)\s*[«""][^»""]+[»""]',
-    r'(?i:АО)\s*[«""][^»""]+[»""]',
-    r'(?i:ПАО)\s*[«""][^»""]+[»""]',
-    r'(?i:ЗАО)\s*[«""][^»""]+[»""]',
-    r'(?i:ИП)\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.',
-    r'(?i:ИП)\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+',
-    r'(?i:Акционерное\s+общество)\s*[«""][^»""]+[»""]',
-    r'(?i:Общество\s+с\s+ограниченной\s+ответственностью)\s*[«""][^»""]+[»""]',
-    r'(?i:Публичное\s+акционерное\s+общество)\s*[«""][^»""]+[»""]',
-    r'(?i:Международн\w+\s+компани\w+\s+акционерн\w+\s+общества?)\s*[«""][^»""]+[»""]',
-    # ---- English / international legal forms ----
-    r'[A-Z0-9][A-Za-z0-9&\'\-\.]+(?:\s+[A-Za-z0-9&\'\-\.]+)*\s+(?i:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?|Public\s+Limited)(?=\s|[,;\.]|$)',
-    # ---- European legal forms ----
-    r'[A-ZÀ-Ö0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ0-9]+)*\s+(?:(?i:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|Pty\.?\s*Ltd\.?|Oy|ApS)|A\.?S\.?|A/S|AB)(?=\s|[,;\.]|$)',
-    # ---- Greek legal forms ----
-    r'[\u0391-\u03a9][\u0370-\u03ff]+(?:\s+[\u0370-\u03ff]+)*\s+(?i:ΛΤΔ\.?|ΕΠΕ\.?|Α\.?Ε\.?|ΔΗΜΟΣΙΑ\s+ΛΤΔ\.?)(?=\s|[,;\.]|$)',
-    # ---- Quoted organisation names (any language) ----
-    r'(?i:[ОООАОПАОЗАОМКАО]\w*)\s*[«"“][^»"”\n]{2,60}[»"”]',
-]
-
-
-# ===============================
 # REGEX PATTERNS FOR DATES (multilingual)
 # ===============================
 _RU_MONTHS = r'(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)'
@@ -156,26 +129,6 @@ DATE_PATTERNS = [
     r'\b\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}\b',
     # "5 octobre 1961" (French months with day & year)
     r'\b\d{1,2}\s+' + _FR_MONTHS + r'\s+\d{4}\b',
-]
-
-
-# ===============================
-# REGEX PATTERNS FOR ADDRESSES (Russian + International)
-# ===============================
-ADDRESS_PATTERNS = [
-    # ---- Russian addresses ----
-    r'\b\d{6},?\s*(?:[гГ](?:ород|\.)\s*[А-ЯЁа-яё\-]+,?\s*)?(?:[а-яёА-ЯЁ][а-яёА-ЯЁ\s\.\-]+,?\s*(?:[дД][.\/]?\s*\d+[а-яёА-ЯЁ]?(?:/\d+)?(?:,?\s*(?:[кК](?:орп)?|[сСтТ](?:тр)?)[.\/]?\s*\d+)?(?:,?\s*(?:[кКqQ]в|офис|оф\.?)\s*\.?\s*\d+)?)?)\b',
-    r'(?:(?:[уУ]л(?:ица|\.)?|[пП]р(?:оспект|[\.\-])?|[пП]ер(?:еулок|\.)?|[шШ]оссе|[бБ]ульвар|[нН]аб(?:ережная|\.)?|[пП]лощадь|[пП]л\.?|[пП]роезд)\s+[А-ЯЁа-яё][А-ЯЁа-яё\s\-]+,?\s*(?:[дД][.\/]?\s*\d+[а-яё]?(?:/\d+)?)(?:,?\s*(?:[кК](?:орп)?|[сСтТ](?:тр)?)[.\/]?\s*\d+)?(?:,?\s*(?:[кКqQ]в|офис|оф\.?)\s*\.?\s*\d+)?)',
-    r'\b[гГ]\.\s*[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s*,\s*[а-яёА-ЯЁ][а-яёА-ЯЁ\s\-]+(?:обл(?:асть|\.)?|кра[йя]|респ(?:ублик[аи]|\.)?|округ))?\b',
-    # ---- English / international addresses (case-insensitive via re.IGNORECASE) ----
-    # "123 Main Street, London, UK" / "191 ATHALASSIS AVE., P.O.Box 25525, LEFKOSIA-CYPRUS"
-    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z \-]{2,40}(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:\s*,\s*(?:P\.O\.?\s*Box\s*\d+|[A-Za-z][A-Za-z \-]*[A-Za-z]))*',
-    # UK postcode: "SW1A 2AA", "EC1A 1BB"
-    r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
-    # US ZIP: "90210" or "90210-1234"
-    r'\b\d{5}(?:-\d{4})?\b(?=[,\s])',
-    # Generic: "City, State/Country" pattern
-    r'\b[A-Z][A-Za-z\-]+(?:\s+[A-Z][A-Za-z\-]+)?,?\s+(?:USA|United States|UK|United Kingdom|Germany|France|Spain|Italy|Netherlands|Switzerland|Austria|Belgium|Poland|Czech Republic|China|Japan|UAE|Canada|Australia)\b',
 ]
 
 
@@ -215,9 +168,9 @@ def validate_entity(name):
         return False
     if name.lower() in GENERIC_TERMS_LOWER:
         return False
-    if ',' in name and '«' in name:
+    if ',' in name and '\u00ab' in name:
         return False
-    if name.count('«') > 1:
+    if name.count('\u00ab') > 1:
         return False
     # Reject entries that are only brackets/dots/punctuation/placeholders
     cleaned = re.sub(r'[\[\]\.\.\(\)\s_\-]', '', name)
@@ -291,7 +244,7 @@ def validate_phone(phone_str):
 # ENTITY GROUPING (dedup variants)
 # ===============================
 
-# Legal suffix normalization map (short form → canonical form)
+# Legal suffix normalization map (short form -> canonical form)
 _LEGAL_SUFFIX_NORMALIZE = [
     (r'\bLtd\.?\b', 'LIMITED'),
     (r'\bInc\.?\b', 'INCORPORATED'),
@@ -306,7 +259,7 @@ _LEGAL_SUFFIX_NORMALIZE = [
 
 def normalize_org_name(name):
     """Normalize company name by expanding legal suffix abbreviations.
-    E.g. 'DEMETRA INVESTMENTS PUBLIC LTD' → 'DEMETRA INVESTMENTS PUBLIC LIMITED'
+    E.g. 'DEMETRA INVESTMENTS PUBLIC LTD' -> 'DEMETRA INVESTMENTS PUBLIC LIMITED'
     Returns the uppercased, suffix-normalized form for comparison."""
     n = name.strip().rstrip('.')
     for pattern, replacement in _LEGAL_SUFFIX_NORMALIZE:
@@ -315,14 +268,14 @@ def normalize_org_name(name):
 
 
 def extract_quoted_name(org):
-    """Extract name from inside «...» quotes."""
-    match = re.search(r'[«""]([^»""]+)[»""]', org)
+    """Extract name from inside \u00ab...\u00bb quotes."""
+    match = re.search(r'[\u00ab\u201c\u201e]([^\u00bb\u201d\u201f]+)[\u00bb\u201d\u201f]', org)
     return match.group(1).strip().lower() if match else None
 
 
 def is_org_abbreviation(inner_a, inner_b):
     """Check if one inner name is an abbreviation of the other.
-    E.g., 'УК ГРП' is abbreviation of 'Управляющая компания ГРП'."""
+    E.g., '\u0423\u041a \u0413\u0420\u041f' is abbreviation of '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0430\u044f \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u044f \u0413\u0420\u041f'."""
     words_a = inner_a.split()
     words_b = inner_b.split()
 
@@ -337,7 +290,7 @@ def is_org_abbreviation(inner_a, inner_b):
     if len(short_words) >= len(long_words):
         return False
 
-    # Count matching suffix words (e.g., "ГРП" matches in both)
+    # Count matching suffix words (e.g., "\u0413\u0420\u041f" matches in both)
     shared_suffix = 0
     for i in range(1, min(len(short_words), len(long_words)) + 1):
         if short_words[-i].lower() == long_words[-i].lower():
@@ -357,7 +310,7 @@ def is_org_abbreviation(inner_a, inner_b):
     if not remaining_short or not remaining_long:
         return shared_suffix > 0
 
-    # "УК" should match initials of "Управляющая Компания"
+    # "\u0423\u041a" should match initials of "\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0430\u044f \u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f"
     abbrev = ''.join(remaining_short).upper()
     long_initials = ''.join(w[0] for w in remaining_long).upper()
 
@@ -365,7 +318,7 @@ def is_org_abbreviation(inner_a, inner_b):
 
 
 def group_org_variants(organizations):
-    """Group orgs sharing the same or abbreviated inner «name», or the same
+    """Group orgs sharing the same or abbreviated inner \u00abname\u00bb, or the same
     suffix-normalized form (e.g. 'X Ltd' and 'X Limited'). Keep longest as canonical."""
     groups = []  # [(canonical, [all_variants])]
     # Cache normalized names for each group's canonical entry
@@ -407,15 +360,15 @@ def group_org_variants(organizations):
 
 
 def split_name_parts(name):
-    """Split name into parts, expanding 'Е.Б.' into separate initials ['Е', 'Б']."""
-    # Insert space between adjacent initials: "Е.Б." -> "Е. Б."
-    expanded = re.sub(r'([А-ЯЁ])\.([А-ЯЁ])', r'\1. \2', name.strip())
+    """Split name into parts, expanding '\u0415.\u0411.' into separate initials ['\u0415', '\u0411']."""
+    # Insert space between adjacent initials: "\u0415.\u0411." -> "\u0415. \u0411."
+    expanded = re.sub(r'([\u0410-\u042f\u0401])\.([\u0410-\u042f\u0401])', r'\1. \2', name.strip())
     parts = [p.strip().rstrip('.') for p in expanded.split() if p.strip()]
     return parts
 
 
 def is_initial_match(name_a, name_b):
-    """Check if one name is abbreviated form of the other (e.g. 'Сурова Е.Б.' vs 'Сурова Елена Борисовна')."""
+    """Check if one name is abbreviated form of the other (e.g. '\u0421\u0443\u0440\u043e\u0432\u0430 \u0415.\u0411.' vs '\u0421\u0443\u0440\u043e\u0432\u0430 \u0415\u043b\u0435\u043d\u0430 \u0411\u043e\u0440\u0438\u0441\u043e\u0432\u043d\u0430')."""
     parts_a = split_name_parts(name_a)
     parts_b = split_name_parts(name_b)
 
@@ -488,15 +441,15 @@ def build_name_pattern(name):
 
     if _is_cyrillic_name(name):
         # --- Cyrillic / Russian declension logic ---
-        has_initials = bool(re.search(r'[А-ЯЁ]\.', name))
+        has_initials = bool(re.search(r'[\u0410-\u042f\u0401]\.', name))
         if has_initials:
-            surname_match = re.match(r'([А-ЯЁа-яё]+)', name)
-            initials = re.findall(r'([А-ЯЁ])\.', name)
+            surname_match = re.match(r'([\u0410-\u042f\u0401\u0430-\u044f\u0451]+)', name)
+            initials = re.findall(r'([\u0410-\u042f\u0401])\.', name)
             if not surname_match or not initials:
                 return None
             surname = surname_match.group(1)
             stem_len = max(3, len(surname) - 2)
-            pat = re.escape(surname[:stem_len]) + '[а-яёА-ЯЁ]{0,4}'
+            pat = re.escape(surname[:stem_len]) + '[\u0430-\u044f\u0451\u0410-\u042f\u0401]{0,4}'
             initials_pat = r'\.?\s*'.join(re.escape(i) for i in initials) + r'\.?'
             pat += r'\s+' + initials_pat
             return pat
@@ -506,7 +459,7 @@ def build_name_pattern(name):
                 if len(part) < 2:
                     continue
                 stem_len = max(3, len(part) - 2)
-                regex_parts.append(re.escape(part[:stem_len]) + '[а-яёА-ЯЁ]{0,4}')
+                regex_parts.append(re.escape(part[:stem_len]) + '[\u0430-\u044f\u0451\u0410-\u042f\u0401]{0,4}')
             return r'\s+'.join(regex_parts) if regex_parts else None
     else:
         # --- Latin / other scripts: exact token matching (case-insensitive) ---
@@ -515,9 +468,9 @@ def build_name_pattern(name):
         for part in parts:
             if not part:
                 continue
-            if re.match(r'^[A-ZА-ЯЁ]\.$', part):  # single initial with dot
+            if re.match(r'^[A-Z\u0410-\u042f\u0401]\.$', part):  # single initial with dot
                 regex_parts.append(re.escape(part[0]) + r'\.?')
-            elif re.match(r'^[A-ZА-ЯЁ]$', part):   # single initial without dot
+            elif re.match(r'^[A-Z\u0410-\u042f\u0401]$', part):   # single initial without dot
                 regex_parts.append(re.escape(part) + r'\.?')
             else:
                 regex_parts.append(re.escape(part))
@@ -575,7 +528,7 @@ def chunk_text_with_overlap(text, max_tokens=4500, overlap_tokens=200):
 
 
 # Maximum number of LLM NER chunks we allow (safeguard against runpod timeout).
-# 80 chunks × ~4 500 tokens = ~360 000 tokens ≈ 700+ pages.
+# 80 chunks x ~4 500 tokens = ~360 000 tokens ~ 700+ pages.
 MAX_CHUNKS = 80
 
 
@@ -591,10 +544,10 @@ Extract ALL of the following from the text:
 5. Phone numbers (phone and fax numbers)
 
 CRITICAL RULES — what to extract:
-- PERSONS: Only real human names, like "John Smith", "Иванов Иван Иванович", "Andreas Menelaou"
-  • Extract person names EVEN when they appear in an official capacity (e.g. "Irene Athanasiadou for Registrar of Companies" → extract "Irene Athanasiadou")
-  • Extract person names that appear as witnesses, signatories, advocates, translators, notaries
-- ORGANISATIONS: Only actual named companies/firms, like "UFG Capital Investment Management Ltd", "ООО «Ромашка»"
+- PERSONS: Only real human names, like "John Smith", "\u0418\u0432\u0430\u043d\u043e\u0432 \u0418\u0432\u0430\u043d \u0418\u0432\u0430\u043d\u043e\u0432\u0438\u0447", "Andreas Menelaou"
+  \u2022 Extract person names EVEN when they appear in an official capacity (e.g. "Irene Athanasiadou for Registrar of Companies" \u2192 extract "Irene Athanasiadou")
+  \u2022 Extract person names that appear as witnesses, signatories, advocates, translators, notaries
+- ORGANISATIONS: Only actual named companies/firms, like "UFG Capital Investment Management Ltd", "\u041e\u041e\u041e \u00ab\u0420\u043e\u043c\u0430\u0448\u043a\u0430\u00bb"
 - DATES: Only specific calendar dates, like "02.01.1983", "October 31, 2024", "5 octobre 1961", "02 JUL 2010"
 - ADDRESSES: Only physical addresses, like "24A, Parnithos street, Strovolos, 2007, Nicosia, Cyprus"
 - PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
@@ -660,19 +613,8 @@ def extract_entities_llm(text_chunk):
         return [], [], [], [], []
 
 
-def detect_companies_regex(text):
-    organizations = []
-    for pattern in COMPANY_FULL_PATTERNS:
-        for match in re.finditer(pattern, text):
-            clean = match.group().strip()
-            if clean and clean not in organizations:
-                organizations.append(clean)
-    log(f"Regex found {len(organizations)} orgs")
-    return organizations
-
-
-def merge_entities(llm_persons, llm_orgs, regex_orgs):
-    """Merge, validate, deduplicate."""
+def merge_entities(llm_persons, llm_orgs):
+    """Validate and deduplicate LLM-extracted persons and organizations."""
     seen_p = set()
     persons = []
     for p in llm_persons:
@@ -683,13 +625,12 @@ def merge_entities(llm_persons, llm_orgs, regex_orgs):
 
     seen_o = set()
     organizations = []
-    for o in llm_orgs + regex_orgs:
+    for o in llm_orgs:
         n = o.strip()
         # Normalize: strip trailing dots/whitespace for dedup comparison
         norm = n.rstrip('. ').lower()
         if n and norm not in seen_o and validate_entity(n):
             seen_o.add(norm)
-            # If we already have a shorter variant, replace with the longer one
             organizations.append(n)
 
     log(f"After validation: {len(persons)} persons, {len(organizations)} orgs")
@@ -746,19 +687,6 @@ def detect_dates_regex(text):
                 seen.add(token.lower())
                 dates.append(token)
     return dates
-
-
-def detect_addresses_regex(text):
-    """Extract all address strings from text using regex patterns."""
-    addresses = []
-    seen = set()
-    for pattern in ADDRESS_PATTERNS:
-        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
-            token = m.group().strip()
-            if token and token.lower() not in seen:
-                seen.add(token.lower())
-                addresses.append(token)
-    return addresses
 
 
 def detect_phones_regex(text):
@@ -888,13 +816,11 @@ def anonymize_document(pages):
 
     log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a {len(all_phones)}ph (raw)")
 
-    # ---- Regex fallback: catch anything the LLM missed ----
-    regex_orgs = detect_companies_regex(full_text)
+    # ---- Regex fallback for dates & phones only (model handles companies & addresses) ----
     regex_dates = detect_dates_regex(full_text)
-    regex_addresses = detect_addresses_regex(full_text)
     regex_phones = detect_phones_regex(full_text)
 
-    persons, organizations = merge_entities(all_persons, all_orgs, regex_orgs)
+    persons, organizations = merge_entities(all_persons, all_orgs)
 
     # Deduplicate dates (LLM + regex) with validation
     seen_d = set()
@@ -908,17 +834,17 @@ def anonymize_document(pages):
     unique_dates = dedup_substrings(unique_dates)
     log(f"Dates: {len(unique_dates)} unique (LLM {len(all_dates)} + regex {len(regex_dates)})")
 
-    # Deduplicate addresses (LLM + regex) with validation
+    # Deduplicate addresses (LLM only) with validation
     seen_a = set()
     unique_addresses = []
-    for a in all_addresses + regex_addresses:
+    for a in all_addresses:
         a = a.strip()
         if a and a.lower() not in seen_a and validate_address(a):
             seen_a.add(a.lower())
             unique_addresses.append(a)
     # Remove partial addresses that are substrings of longer addresses
     unique_addresses = dedup_substrings(unique_addresses)
-    log(f"Addresses: {len(unique_addresses)} unique (LLM {len(all_addresses)} + regex {len(regex_addresses)})")
+    log(f"Addresses: {len(unique_addresses)} unique (LLM {len(all_addresses)})")
 
     # Deduplicate phones (LLM + regex) with validation
     seen_ph = set()
