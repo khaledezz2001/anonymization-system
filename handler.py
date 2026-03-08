@@ -175,6 +175,24 @@ def validate_address(addr_str):
         return False
     if not any(c.isalpha() for c in addr_str):
         return False
+    # Must contain at least one digit (house number, postal code, etc.)
+    if not any(c.isdigit() for c in addr_str):
+        return False
+    # Reject sentence fragments that the LLM might extract as addresses
+    addr_lower = addr_str.lower()
+    reject_phrases = [
+        'will ter', 'shall', 'hours after', 'days after', 'time it has been',
+        'provided that', 'subject to', 'pursuant to', 'in accordance',
+        'notwithstanding', 'herein', 'hereof', 'hereto', 'hereby',
+        'the tenant', 'the landlord', 'the company', 'the parties',
+        'terminate', 'agreement', 'obligation',
+    ]
+    for phrase in reject_phrases:
+        if phrase in addr_lower:
+            return False
+    # Reject if it looks like a date fragment (starts with DD/MM pattern)
+    if re.match(r'^\d{1,2}/\d{2,4}\b', addr_str):
+        return False
     return True
 
 
@@ -333,9 +351,14 @@ CRITICAL RULES - what to extract:
 - PERSONS: Only real human names, like "John Smith", "Andreas Menelaou", "Carl Mackinder"
   - Extract person names EVEN when they appear in an official capacity
   - Extract person names from witnesses, signatories, advocates
-- ORGANISATIONS: Only actual named companies/firms, like "UFG Capital Investment Management Ltd", "DEMETRA INVESTMENTS PUBLIC LIMITED"
+  - If a person's name is used as a business/firm name (e.g. "Maratheftis Yiannouris" as an architecture firm), extract it as BOTH a person AND an organisation
+- ORGANISATIONS: Only actual named companies/firms
+  - Extract ALL language variants of the same company. For example if both "DEMETRA INVESTMENTS PUBLIC LIMITED" and its Greek equivalent appear, extract BOTH
+  - Include companies in any language: English, Greek, Russian, French, German, etc.
 - DATES: Only specific calendar dates, like "01/09/2015", "October 31, 2024", "24th of July, 2015"
-- ADDRESSES: Only physical addresses, like "82 Acropoleos Avenue, Nicosia, Cyprus", "191 ATHALASSIS AVE., P.O.Box 25525, LEFKOSIA-CYPRUS"
+- ADDRESSES: Only physical street/postal addresses with a street name or P.O. Box
+  - Must contain a street name, avenue, road, or similar
+  - Do NOT extract sentence fragments that happen to mention numbers
 - PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
 
 CRITICAL RULES - what NOT to extract:
@@ -344,6 +367,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract countries alone as organisations
 - Do NOT extract time durations as dates: "fourteen days", "six months"
 - Do NOT extract bare years as dates: "2014" alone is NOT a date
+- Do NOT extract sentence fragments as addresses: "72 hours after..." is NOT an address
 
 Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
 
@@ -477,14 +501,14 @@ def replace_dates(text, date_map):
 def replace_addresses(text, addr_map):
     for addr_str in sorted(addr_map.keys(), key=len, reverse=True):
         pattern = _flexible_pattern(addr_str)
-        text = re.sub(pattern, addr_map[addr_str], text)
+        text = re.sub(pattern, addr_map[addr_str], text, flags=re.IGNORECASE)
     return text
 
 
 def replace_phones(text, phone_map):
     for phone_str in sorted(phone_map.keys(), key=len, reverse=True):
         pattern = _flexible_pattern(phone_str)
-        text = re.sub(pattern, phone_map[phone_str], text)
+        text = re.sub(pattern, phone_map[phone_str], text, flags=re.IGNORECASE)
     return text
 
 
