@@ -4,7 +4,9 @@ import re
 import json
 import time
 import gc
+import os
 
+from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
@@ -25,9 +27,24 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 
 # ===============================
-# LOAD MODEL
+# DOWNLOAD & LOAD MODEL
 # ===============================
-MODEL_PATH = "/models/qwen"
+MODEL_ID = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+MODEL_PATH = "/runpod-volume/models/qwen"
+
+# Auto-download to network volume on first start
+if not os.path.exists(os.path.join(MODEL_PATH, "config.json")):
+    log(f"Model not found at {MODEL_PATH}, downloading {MODEL_ID}...")
+    os.makedirs(MODEL_PATH, exist_ok=True)
+    snapshot_download(
+        repo_id=MODEL_ID,
+        local_dir=MODEL_PATH,
+        local_dir_use_symlinks=False,
+        resume_download=True
+    )
+    log("Download complete!")
+else:
+    log(f"Model already on volume at {MODEL_PATH}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(
@@ -37,7 +54,7 @@ model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True
 )
 model.eval()
-log("Qwen3-30B-A3B-Instruct-2507 loaded")
+log(f"{MODEL_ID} loaded")
 
 
 # ===============================
@@ -97,6 +114,10 @@ DATE_PATTERNS = [
     r'\b' + _EN_MONTHS + r'\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b',
     r'\b' + _EN_MONTHS + r'\.?\s+\d{4}\b',
     r'\b\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}\b',
+    # "15th day of March, 2022" / "1st day of January, 2020"
+    r'\b\d{1,2}(?:st|nd|rd|th)\s+day\s+of\s+' + _EN_MONTHS + r',?\s+\d{4}\b',
+    # "24th of July, 2015" / "1st of January 2020"
+    r'\b\d{1,2}(?:st|nd|rd|th)\s+of\s+' + _EN_MONTHS + r',?\s+\d{4}\b',
 ]
 
 
@@ -178,29 +199,75 @@ def validate_address(addr_str):
     # Must contain at least one digit (house number, postal code, etc.)
     if not any(c.isdigit() for c in addr_str):
         return False
-    # Reject sentence fragments that the LLM might extract as addresses
+
     addr_lower = addr_str.lower()
+
+    # Must contain at least one address indicator word
+    # A real address has a street type, P.O. Box, floor, postal code hint, etc.
+    address_indicators = [
+        'street', 'st.', 'avenue', 'ave.', 'ave,', 'road', 'rd.',
+        'boulevard', 'blvd', 'lane', 'drive', 'court', 'place',
+        'square', 'way', 'crescent', 'close', 'terrace', 'parkway',
+        'p.o. box', 'p.o.box', 'po box', 'pobox',
+        'floor', 'suite', 'unit', 'apt', 'apartment', 'building',
+        'limassol', 'nicosia', 'larnaca', 'paphos', 'famagusta',
+        'cyprus', 'lefkosia', 'strovolos', 'aglantzia', 'acropolis',
+    ]
+    has_indicator = any(ind in addr_lower for ind in address_indicators)
+    if not has_indicator:
+        return False
+
+    # Reject sentence fragments
     reject_phrases = [
-        'will ter', 'shall', 'hours after', 'days after', 'time it has been',
+        'shall', 'will be', 'would', 'should', 'could', 'must',
+        'hours after', 'days after', 'time it has been',
         'provided that', 'subject to', 'pursuant to', 'in accordance',
-        'notwithstanding', 'herein', 'hereof', 'hereto', 'hereby',
+        'in accord', 'notwithstanding', 'herein', 'hereof', 'hereto', 'hereby',
         'the tenant', 'the landlord', 'the company', 'the parties',
-        'terminate', 'agreement', 'obligation',
+        'terminate', 'terminated', 'agreement', 'obligation',
+        'or any law', 'unless',
+        'be read', 'regulation', 'article', 'section', 'clause',
+        'cap.', 'amending', 'substitut', 'earlier',
+        'whichever', 'forthwith', 'reasonable', 'written notice',
     ]
     for phrase in reject_phrases:
         if phrase in addr_lower:
             return False
-    # Reject if it looks like a date fragment (starts with DD/MM pattern)
+
+    # Reject if it starts with a bare year (e.g. "2025 unless terminated...")
+    if re.match(r'^\d{4}\s', addr_str):
+        return False
+
+    # Reject if it looks like a date fragment
     if re.match(r'^\d{1,2}/\d{2,4}\b', addr_str):
         return False
+
     return True
 
 
-def validate_phone(phone_str):
+def validate_phone(phone_str, full_text=None):
     phone_str = phone_str.strip()
     digits = re.sub(r'\D', '', phone_str)
     if len(digits) < 6:
         return False
+    # If we have the full text, check context around this number
+    # Reject if it appears near account/bank keywords
+    if full_text:
+        # Find the number in the full text and check surrounding words
+        pos = full_text.find(phone_str)
+        if pos == -1:
+            pos = full_text.lower().find(phone_str.lower())
+        if pos != -1:
+            # Look at 60 chars before and after for context
+            start = max(0, pos - 60)
+            end = min(len(full_text), pos + len(phone_str) + 60)
+            context = full_text[start:end].lower()
+            account_keywords = [
+                'account', 'acct', 'a/c', 'iban', 'swift', 'bic',
+                'bank', 'deposit', 'routing', 'sort code',
+            ]
+            if any(kw in context for kw in account_keywords):
+                return False
     return True
 
 
@@ -368,6 +435,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract time durations as dates: "fourteen days", "six months"
 - Do NOT extract bare years as dates: "2014" alone is NOT a date
 - Do NOT extract sentence fragments as addresses: "72 hours after..." is NOT an address
+- Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
 
 Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
 
@@ -676,7 +744,7 @@ def anonymize_document(pages):
     unique_phones = []
     for ph in all_phones + regex_phones:
         ph = ph.strip()
-        if ph and ph.lower() not in seen_ph and validate_phone(ph):
+        if ph and ph.lower() not in seen_ph and validate_phone(ph, full_text):
             seen_ph.add(ph.lower())
             unique_phones.append(ph)
     unique_phones = dedup_substrings(unique_phones)
