@@ -4,12 +4,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models
 ENV TRANSFORMERS_CACHE=/models
-ENV HF_HUB_ENABLE_HF_TRANSFER=1
+ENV HF_HUB_ENABLE_HF_TRANSFER=0
 ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# Python deps + fast download
+# Python deps
 COPY requirements.txt /requirements.txt
-RUN pip install --no-cache-dir -r /requirements.txt hf_transfer
+RUN pip install --no-cache-dir -r /requirements.txt
+
 
 # ===============================
 # DOWNLOAD Qwen/Qwen3-30B-A3B-Instruct-2507
