@@ -4,15 +4,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models
 ENV TRANSFORMERS_CACHE=/models
-ENV HF_HUB_ENABLE_HF_TRANSFER=0
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
 ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# Python deps
+# Python deps + fast download
 COPY requirements.txt /requirements.txt
-RUN pip install --no-cache-dir -r /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt hf_transfer
 
 # ===============================
-# DOWNLOAD Qwen/Qwen3-30B-A3B-Instruct-25 07
+# DOWNLOAD Qwen/Qwen3-30B-A3B-Instruct-2507
 # ===============================
 RUN python3 -u <<'EOF'
 from huggingface_hub import snapshot_download
