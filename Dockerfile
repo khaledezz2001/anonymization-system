@@ -12,7 +12,7 @@ COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
 # ===============================
-# DOWNLOAD Qwen/Qwen3-30B-A3B-Instruct-2507
+# DOWNLOAD Qwen/Qwen3-30B-A3B-Instruct-25 07
 # ===============================
 RUN python3 -u <<'EOF'
 from huggingface_hub import snapshot_download
