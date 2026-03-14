@@ -127,8 +127,24 @@ DATE_PATTERNS = [
 ADDRESS_PATTERNS = [
     # "123 Main Street, City" / "191 ATHALASSIS AVE., P.O.Box 25525, LEFKOSIA-CYPRUS"
     r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z \-]{2,40}(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:\s*,\s*(?:P\.O\.?\s*Box\s*\d+|[A-Za-z][A-Za-z \-]*[A-Za-z]))*',
+    # "str. Dourleion 16904/53" / "ul. Name 123"
+    r'(?i:\bstr\.\s+[A-Za-z][A-Za-z \-]+\d[\d/A-Za-z]*)',
     # UK postcode
     r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
+]
+
+# ===============================
+# REGEX PATTERNS FOR REGISTRATION IDS
+# ===============================
+REG_ID_PATTERNS = [
+    # Cyprus: H.E.107777, HE317807
+    r'H\.?E\.?\s*\d{4,10}',
+    # Germany: HRB 12345
+    r'HRB\s*\d{4,10}',
+    # UK: Company No. 12345678
+    r'(?i:Company\s+No\.?\s*\d{4,10})',
+    # Generic: Reg. No. 12345, Registration No. 12345
+    r'(?i:Reg(?:istration)?\.?\s*No\.?\s*\d{4,10})',
 ]
 
 
@@ -196,28 +212,10 @@ def validate_address(addr_str):
         return False
     if not any(c.isalpha() for c in addr_str):
         return False
-    # Must contain at least one digit (house number, postal code, etc.)
-    if not any(c.isdigit() for c in addr_str):
-        return False
 
     addr_lower = addr_str.lower()
 
-    # Must contain at least one address indicator word
-    # A real address has a street type, P.O. Box, floor, postal code hint, etc.
-    address_indicators = [
-        'street', 'st.', 'avenue', 'ave.', 'ave,', 'road', 'rd.',
-        'boulevard', 'blvd', 'lane', 'drive', 'court', 'place',
-        'square', 'way', 'crescent', 'close', 'terrace', 'parkway',
-        'p.o. box', 'p.o.box', 'po box', 'pobox',
-        'floor', 'suite', 'unit', 'apt', 'apartment', 'building',
-        'limassol', 'nicosia', 'larnaca', 'paphos', 'famagusta',
-        'cyprus', 'lefkosia', 'strovolos', 'aglantzia', 'acropolis',
-    ]
-    has_indicator = any(ind in addr_lower for ind in address_indicators)
-    if not has_indicator:
-        return False
-
-    # Reject sentence fragments
+    # Reject obvious sentence fragments (legal/contract language)
     reject_phrases = [
         'shall', 'will be', 'would', 'should', 'could', 'must',
         'hours after', 'days after', 'time it has been',
@@ -229,6 +227,8 @@ def validate_address(addr_str):
         'be read', 'regulation', 'article', 'section', 'clause',
         'cap.', 'amending', 'substitut', 'earlier',
         'whichever', 'forthwith', 'reasonable', 'written notice',
+        'liability', 'indemnity', 'warranty', 'covenant',
+        'whereas', 'witnesseth', 'stipulat',
     ]
     for phrase in reject_phrases:
         if phrase in addr_lower:
@@ -411,22 +411,26 @@ Extract ALL of the following from the text:
 1. Person names (actual human names only)
 2. Organisation / company names (actual registered business names only)
 3. Dates (specific calendar dates only)
-4. Addresses (physical street/postal addresses only)
+4. Addresses (physical street/postal addresses in any language)
 5. Phone numbers (phone and fax numbers)
+6. Registration IDs (company registration numbers, tax IDs)
 
 CRITICAL RULES - what to extract:
-- PERSONS: Only real human names, like "John Smith", "Andreas Menelaou", "Carl Mackinder"
+- PERSONS: Only real human names, like "John Smith", "Andreas Menelaou"
   - Extract person names EVEN when they appear in an official capacity
   - Extract person names from witnesses, signatories, advocates
-  - If a person's name is used as a business/firm name (e.g. "Maratheftis Yiannouris" as an architecture firm), extract it as BOTH a person AND an organisation
+  - If a person's name is used as a business/firm name, extract it as BOTH a person AND an organisation
 - ORGANISATIONS: Only actual named companies/firms
-  - Extract ALL language variants of the same company. For example if both "DEMETRA INVESTMENTS PUBLIC LIMITED" and its Greek equivalent appear, extract BOTH
+  - Extract ALL language variants of the same company
   - Include companies in any language: English, Greek, Russian, French, German, etc.
-- DATES: Only specific calendar dates, like "01/09/2015", "October 31, 2024", "24th of July, 2015"
-- ADDRESSES: Only physical street/postal addresses with a street name or P.O. Box
-  - Must contain a street name, avenue, road, or similar
+- DATES: Only specific calendar dates, like "01/09/2015", "24th of July, 2015"
+- ADDRESSES: Physical street/postal addresses in ANY language
+  - Extract addresses from EVERYWHERE: signature pages, witness sections, headers, body text
+  - Addresses can be in any format and any language
   - Do NOT extract sentence fragments that happen to mention numbers
 - PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
+- REGISTRATION IDS: Any company or entity identification numbers
+  - Examples: "H.E.107777", "HE317807", "HRB 12345", "Company No. 12345678", "Reg. No. 123456", "Tax ID 123456"
 
 CRITICAL RULES - what NOT to extract:
 - Do NOT extract role titles as persons: Chairman, Director, Secretary, Landlord, Tenant
@@ -434,7 +438,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract countries alone as organisations
 - Do NOT extract time durations as dates: "fourteen days", "six months"
 - Do NOT extract bare years as dates: "2014" alone is NOT a date
-- Do NOT extract sentence fragments as addresses: "72 hours after..." is NOT an address
+- Do NOT extract sentence fragments as addresses
 - Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
 
 Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
@@ -444,7 +448,8 @@ Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
   "organizations": ["org1", "org2"],
   "dates": ["date1", "date2"],
   "addresses": ["addr1", "addr2"],
-  "phones": ["phone1", "phone2"]
+  "phones": ["phone1", "phone2"],
+  "registration_ids": ["H.E.107777"]
 }"""
 
 
@@ -493,12 +498,13 @@ def extract_entities_llm(text_chunk):
         dates = [d.strip() for d in result.get("dates", []) if d and d.strip()]
         addresses = [a.strip() for a in result.get("addresses", []) if a and a.strip()]
         phones = [p.strip() for p in result.get("phones", []) if p and p.strip()]
-        log(f"LLM extracted: {len(persons)}p {len(organizations)}o {len(dates)}d {len(addresses)}a {len(phones)}ph")
-        return persons, organizations, dates, addresses, phones
+        reg_ids = [r.strip() for r in result.get("registration_ids", []) if r and r.strip()]
+        log(f"LLM extracted: {len(persons)}p {len(organizations)}o {len(dates)}d {len(addresses)}a {len(phones)}ph {len(reg_ids)}reg")
+        return persons, organizations, dates, addresses, phones, reg_ids
     except (json.JSONDecodeError, AttributeError) as e:
         log(f"Parse failed: {e}")
         log(f"Cleaned output was: {cleaned_output[:1000]}")
-        return [], [], [], [], []
+        return [], [], [], [], [], []
 
 
 # ===============================
@@ -691,23 +697,24 @@ def anonymize_document(pages):
             )
         }
 
-    all_persons, all_orgs, all_dates, all_addresses, all_phones = [], [], [], [], []
+    all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids = [], [], [], [], [], []
     ner_start = time.time()
     for i, chunk in enumerate(chunks):
         t = time.time()
         log(f"Chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
-        persons, orgs, dates, addresses, phones = extract_entities_llm(chunk)
+        persons, orgs, dates, addresses, phones, reg_ids = extract_entities_llm(chunk)
         all_persons.extend(persons)
         all_orgs.extend(orgs)
         all_dates.extend(dates)
         all_addresses.extend(addresses)
         all_phones.extend(phones)
+        all_reg_ids.extend(reg_ids)
         log(f"Chunk {i+1} done in {time.time()-t:.1f}s")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             gc.collect()
 
-    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a {len(all_phones)}ph (raw)")
+    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a {len(all_phones)}ph {len(all_reg_ids)}reg (raw)")
 
     # Regex fallback: catch anything the LLM missed
     regex_orgs = detect_companies_regex(full_text)
@@ -776,6 +783,26 @@ def anonymize_document(pages):
     for i, p in enumerate(sorted(unique_phones, key=find_first_pos), 1):
         phone_map[p] = f"[PHONE{i}]"
 
+    # Detect H.E. registration IDs via regex
+    reg_ids = []
+    seen_reg = set()
+    for pattern in REG_ID_PATTERNS:
+        for m in re.finditer(pattern, full_text, flags=re.IGNORECASE):
+            token = m.group().strip()
+            if token and token.lower() not in seen_reg:
+                seen_reg.add(token.lower())
+                reg_ids.append(token)
+    # Also add any from LLM extraction
+    for chunk_result in all_reg_ids:
+        token = chunk_result.strip()
+        if token and token.lower() not in seen_reg:
+            seen_reg.add(token.lower())
+            reg_ids.append(token)
+
+    reg_id_map = {}
+    for i, r in enumerate(sorted(reg_ids, key=find_first_pos), 1):
+        reg_id_map[r] = f"[REG_ID{i}]"
+
     log(f"Date mapping: {len(date_map)} entries")
     for orig, ph in date_map.items():
         log(f"  {ph} <- {orig}")
@@ -784,6 +811,9 @@ def anonymize_document(pages):
         log(f"  {ph} <- {orig}")
     log(f"Phone mapping: {len(phone_map)} entries")
     for orig, ph in phone_map.items():
+        log(f"  {ph} <- {orig}")
+    log(f"Reg ID mapping: {len(reg_id_map)} entries")
+    for orig, ph in reg_id_map.items():
         log(f"  {ph} <- {orig}")
 
     # Build person name patterns
@@ -798,6 +828,9 @@ def anonymize_document(pages):
         anon_text = replace_addresses(anon_text, addr_map)
         anon_text = replace_dates(anon_text, date_map)
         anon_text = replace_phones(anon_text, phone_map)
+        # Replace H.E. registration IDs
+        for reg_str in sorted(reg_id_map.keys(), key=len, reverse=True):
+            anon_text = re.sub(re.escape(reg_str), reg_id_map[reg_str], anon_text, flags=re.IGNORECASE)
         anonymized_pages.append({"page": page["page"], "text": anon_text})
 
     # Build display mapping
@@ -813,6 +846,7 @@ def anonymize_document(pages):
     display_mapping.update(addr_map)
     display_mapping.update(date_map)
     display_mapping.update(phone_map)
+    display_mapping.update(reg_id_map)
 
     total = time.time() - total_start
     log(f"Done in {total:.1f}s — {len(display_mapping)} entities across {len(pages)} pages")
