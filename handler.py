@@ -149,6 +149,23 @@ REG_ID_PATTERNS = [
 
 
 # ===============================
+# REGEX PATTERNS FOR BANK ACCOUNTS
+# ===============================
+BANK_ACCOUNT_PATTERNS = [
+    # IBAN: 2 letter country code + 2 check digits + up to 30 alphanumeric
+    r'\b[A-Z]{2}\d{2}\s?[A-Z0-9]{4}\s?[A-Z0-9]{4}\s?[A-Z0-9]{4}(?:\s?[A-Z0-9]{4}){0,5}(?:\s?[A-Z0-9]{1,4})?\b',
+    # SWIFT/BIC codes: 8 or 11 alphanumeric characters (e.g. BARCGB22XXX)
+    r'(?i:(?:SWIFT|BIC)\s*(?:code)?\s*[:.]?\s*)([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)',
+    # Standalone SWIFT/BIC pattern (8 or 11 chars, typical format)
+    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b',
+    # Account numbers near keywords: "Account No. 1234567890" / "A/C 1234567890"
+    r'(?i:(?:account|acct|a/c)\s*(?:no\.?|number|#)?\s*[:.]?\s*)(\d[\d\s\-]{5,25}\d)',
+    # Sort code: 12-34-56
+    r'(?i:sort\s*code\s*[:.]?\s*)(\d{2}-\d{2}-\d{2})',
+]
+
+
+# ===============================
 # REGEX PATTERNS FOR PHONES
 # ===============================
 PHONE_PATTERNS = [
@@ -203,6 +220,27 @@ def validate_date(date_str):
         return False
     if not any(c.isdigit() for c in date_str):
         return False
+
+    # Reject section/article numbers like "2.2.11", "1.3.5", "10.2.1"
+    # These are dot-separated numbering that the date regex can match
+    section_match = re.fullmatch(r'(\d{1,2})\.(\d{1,2})\.(\d{1,4})', date_str)
+    if section_match:
+        a, b, c = int(section_match.group(1)), int(section_match.group(2)), int(section_match.group(3))
+        # Real dates: DD.MM.YYYY (day 1-31, month 1-12, year >=1900)
+        # or DD.MM.YY  (day 1-31, month 1-12, year 0-99)
+        is_plausible_date = (
+            1 <= a <= 31 and 1 <= b <= 12 and (
+                c >= 1900 or  # DD.MM.YYYY
+                (c <= 99 and a <= 31 and b <= 12)  # DD.MM.YY
+            )
+        )
+        # Also check MM.DD.YYYY (US format)
+        is_plausible_us = (
+            1 <= a <= 12 and 1 <= b <= 31 and c >= 1900
+        )
+        if not (is_plausible_date or is_plausible_us):
+            return False
+
     return True
 
 
@@ -229,6 +267,11 @@ def validate_address(addr_str):
         'whichever', 'forthwith', 'reasonable', 'written notice',
         'liability', 'indemnity', 'warranty', 'covenant',
         'whereas', 'witnesseth', 'stipulat',
+        'extraordinary', 'ordinary', 'resolution', 'meeting',
+        'general meeting', 'shareholder', 'dividend', 'quorum',
+        'registered office', 'memorandum', 'constitution',
+        'paragraph', 'sub-clause', 'schedule', 'appendix', 'annex',
+        'approval', 'consent', 'notice of', 'right to',
     ]
     for phrase in reject_phrases:
         if phrase in addr_lower:
@@ -414,6 +457,7 @@ Extract ALL of the following from the text:
 4. Addresses (physical street/postal addresses in any language)
 5. Phone numbers (phone and fax numbers)
 6. Registration IDs (company registration numbers, tax IDs)
+7. Bank accounts (IBAN numbers, bank account numbers, SWIFT/BIC codes)
 
 CRITICAL RULES - what to extract:
 - PERSONS: Only real human names, like "John Smith", "Andreas Menelaou"
@@ -424,6 +468,7 @@ CRITICAL RULES - what to extract:
   - Extract ALL language variants of the same company
   - Include companies in any language: English, Greek, Russian, French, German, etc.
 - DATES: Only specific calendar dates, like "01/09/2015", "24th of July, 2015"
+  - Do NOT extract section or article numbers as dates (e.g. "2.2.11", "3.1.5" are section numbers, NOT dates)
 - ADDRESSES: Physical street/postal addresses in ANY language
   - Extract addresses from EVERYWHERE: signature pages, witness sections, headers, body text
   - Addresses can be in any format and any language
@@ -431,6 +476,9 @@ CRITICAL RULES - what to extract:
 - PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
 - REGISTRATION IDS: Any company or entity identification numbers
   - Examples: "H.E.107777", "HE317807", "HRB 12345", "Company No. 12345678", "Reg. No. 123456", "Tax ID 123456"
+- BANK ACCOUNTS: Bank account numbers, IBAN codes, SWIFT/BIC codes
+  - Examples: "CY17 0020 0128 0000 0012 0052 7600", "BCYPCY2N", "Account No. 0120052760"
+  - Include ANY numbers explicitly labeled as bank accounts, deposit accounts, or payment accounts
 
 CRITICAL RULES - what NOT to extract:
 - Do NOT extract role titles as persons: Chairman, Director, Secretary, Landlord, Tenant
@@ -438,6 +486,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract countries alone as organisations
 - Do NOT extract time durations as dates: "fourteen days", "six months"
 - Do NOT extract bare years as dates: "2014" alone is NOT a date
+- Do NOT extract section/article numbers as dates: "2.2.11", "3.1.5" are NOT dates
 - Do NOT extract sentence fragments as addresses
 - Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
 
@@ -449,7 +498,8 @@ Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
   "dates": ["date1", "date2"],
   "addresses": ["addr1", "addr2"],
   "phones": ["phone1", "phone2"],
-  "registration_ids": ["H.E.107777"]
+  "registration_ids": ["H.E.107777"],
+  "bank_accounts": ["CY17 0020 0128 0000 0012 0052 7600"]
 }"""
 
 
@@ -463,7 +513,7 @@ def strip_thinking(text):
 def extract_entities_llm(text_chunk):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, and phones:\n\n{text_chunk}"}
+        {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, phones, registration IDs, and bank accounts:\n\n{text_chunk}"}
     ]
 
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -499,12 +549,13 @@ def extract_entities_llm(text_chunk):
         addresses = [a.strip() for a in result.get("addresses", []) if a and a.strip()]
         phones = [p.strip() for p in result.get("phones", []) if p and p.strip()]
         reg_ids = [r.strip() for r in result.get("registration_ids", []) if r and r.strip()]
-        log(f"LLM extracted: {len(persons)}p {len(organizations)}o {len(dates)}d {len(addresses)}a {len(phones)}ph {len(reg_ids)}reg")
-        return persons, organizations, dates, addresses, phones, reg_ids
+        bank_accounts = [b.strip() for b in result.get("bank_accounts", []) if b and b.strip()]
+        log(f"LLM extracted: {len(persons)}p {len(organizations)}o {len(dates)}d {len(addresses)}a {len(phones)}ph {len(reg_ids)}reg {len(bank_accounts)}bank")
+        return persons, organizations, dates, addresses, phones, reg_ids, bank_accounts
     except (json.JSONDecodeError, AttributeError) as e:
         log(f"Parse failed: {e}")
         log(f"Cleaned output was: {cleaned_output[:1000]}")
-        return [], [], [], [], [], []
+        return [], [], [], [], [], [], []
 
 
 # ===============================
@@ -557,12 +608,43 @@ def detect_phones_regex(text):
     return phones
 
 
+def detect_bank_accounts_regex(text):
+    """Detect bank account numbers, IBANs, SWIFT/BIC codes via regex."""
+    accounts = []
+    seen = set()
+    for pattern in BANK_ACCOUNT_PATTERNS:
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+            # Some patterns have capture groups for the actual value
+            token = (m.group(1) if m.lastindex and m.group(1) else m.group()).strip()
+            if token and token.lower() not in seen and len(token) >= 6:
+                seen.add(token.lower())
+                accounts.append(token)
+    return accounts
+
+
+def validate_bank_account(acct_str):
+    """Validate a bank account string."""
+    acct_str = acct_str.strip()
+    if len(acct_str) < 6:
+        return False
+    # Must contain at least some digits
+    if not any(c.isdigit() for c in acct_str):
+        return False
+    return True
+
+
 # ===============================
 # REPLACEMENT FUNCTIONS
 # ===============================
 def _flexible_pattern(text_str):
+    """Build a regex that matches text_str with flexible whitespace,
+    but NEVER matches in the middle of a word."""
     escaped = re.escape(text_str)
-    return escaped.replace(r'\ ', r'\s+')
+    flexible = escaped.replace(r'\ ', r'\s+')
+    # Word boundary guards: prevent matching inside words
+    # Left:  must not be preceded by a word character (letter/digit/underscore)
+    # Right: must not be followed by a word character
+    return r'(?<!\w)' + flexible + r'(?!\w)'
 
 
 def replace_dates(text, date_map):
@@ -697,30 +779,32 @@ def anonymize_document(pages):
             )
         }
 
-    all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids = [], [], [], [], [], []
+    all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts = [], [], [], [], [], [], []
     ner_start = time.time()
     for i, chunk in enumerate(chunks):
         t = time.time()
         log(f"Chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
-        persons, orgs, dates, addresses, phones, reg_ids = extract_entities_llm(chunk)
+        persons, orgs, dates, addresses, phones, reg_ids, bank_accounts = extract_entities_llm(chunk)
         all_persons.extend(persons)
         all_orgs.extend(orgs)
         all_dates.extend(dates)
         all_addresses.extend(addresses)
         all_phones.extend(phones)
         all_reg_ids.extend(reg_ids)
+        all_bank_accounts.extend(bank_accounts)
         log(f"Chunk {i+1} done in {time.time()-t:.1f}s")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             gc.collect()
 
-    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a {len(all_phones)}ph {len(all_reg_ids)}reg (raw)")
+    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a {len(all_phones)}ph {len(all_reg_ids)}reg {len(all_bank_accounts)}bank (raw)")
 
     # Regex fallback: catch anything the LLM missed
     regex_orgs = detect_companies_regex(full_text)
     regex_dates = detect_dates_regex(full_text)
     regex_addresses = detect_addresses_regex(full_text)
     regex_phones = detect_phones_regex(full_text)
+    regex_bank_accounts = detect_bank_accounts_regex(full_text)
 
     persons, organizations = merge_entities(all_persons, all_orgs, regex_orgs)
 
@@ -803,6 +887,21 @@ def anonymize_document(pages):
     for i, r in enumerate(sorted(reg_ids, key=find_first_pos), 1):
         reg_id_map[r] = f"[REG_ID{i}]"
 
+    # Deduplicate bank accounts (LLM + regex)
+    seen_bank = set()
+    unique_bank_accounts = []
+    for ba in all_bank_accounts + regex_bank_accounts:
+        ba = ba.strip()
+        if ba and ba.lower() not in seen_bank and validate_bank_account(ba):
+            seen_bank.add(ba.lower())
+            unique_bank_accounts.append(ba)
+    unique_bank_accounts = dedup_substrings(unique_bank_accounts)
+    log(f"Bank accounts: {len(unique_bank_accounts)} unique")
+
+    bank_account_map = {}
+    for i, ba in enumerate(sorted(unique_bank_accounts, key=find_first_pos), 1):
+        bank_account_map[ba] = f"[BANK_ACCOUNT{i}]"
+
     log(f"Date mapping: {len(date_map)} entries")
     for orig, ph in date_map.items():
         log(f"  {ph} <- {orig}")
@@ -814,6 +913,9 @@ def anonymize_document(pages):
         log(f"  {ph} <- {orig}")
     log(f"Reg ID mapping: {len(reg_id_map)} entries")
     for orig, ph in reg_id_map.items():
+        log(f"  {ph} <- {orig}")
+    log(f"Bank account mapping: {len(bank_account_map)} entries")
+    for orig, ph in bank_account_map.items():
         log(f"  {ph} <- {orig}")
 
     # Build person name patterns
@@ -830,7 +932,12 @@ def anonymize_document(pages):
         anon_text = replace_phones(anon_text, phone_map)
         # Replace H.E. registration IDs
         for reg_str in sorted(reg_id_map.keys(), key=len, reverse=True):
-            anon_text = re.sub(re.escape(reg_str), reg_id_map[reg_str], anon_text, flags=re.IGNORECASE)
+            pattern = _flexible_pattern(reg_str)
+            anon_text = re.sub(pattern, reg_id_map[reg_str], anon_text, flags=re.IGNORECASE)
+        # Replace bank account numbers
+        for ba_str in sorted(bank_account_map.keys(), key=len, reverse=True):
+            pattern = _flexible_pattern(ba_str)
+            anon_text = re.sub(pattern, bank_account_map[ba_str], anon_text, flags=re.IGNORECASE)
         anonymized_pages.append({"page": page["page"], "text": anon_text})
 
     # Build display mapping
@@ -847,6 +954,7 @@ def anonymize_document(pages):
     display_mapping.update(date_map)
     display_mapping.update(phone_map)
     display_mapping.update(reg_id_map)
+    display_mapping.update(bank_account_map)
 
     total = time.time() - total_start
     log(f"Done in {total:.1f}s — {len(display_mapping)} entities across {len(pages)} pages")
