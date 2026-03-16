@@ -89,9 +89,11 @@ GENERIC_TERMS_LOWER = {
 # ===============================
 COMPANY_FULL_PATTERNS = [
     # English / international legal forms
-    r'[A-Z0-9][A-Za-z0-9&\'\-\.]+(?:\s+[A-Za-z0-9&\'\-\.]+)*\s+(?i:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?|Public\s+Limited)(?=\s|[,;\.]|$)',
+    r'[A-Z0-9][A-Za-z0-9&\'\-\.]+(?:\s+[A-Za-z0-9&\'\-\.]+)*\s+(?i:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLD\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?|Public\s+Limited)(?=\s|[,;\.]|$)',
     # European legal forms
     r'[A-Z\u00c0-\u00d60-9][A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff0-9]+(?:\s+[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff0-9]+)*\s+(?:(?i:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|Pty\.?\s*Ltd\.?|Oy|ApS)|A\.?S\.?|A/S|AB)(?=\s|[,;\.]|$)',
+    # Russian/Cyrillic legal forms (ООО, АО, ЗАО, ПАО, ОАО, etc.)
+    r'(?:ООО|АО|ЗАО|ПАО|ОАО)\s*«[^»]+»',
 ]
 
 
@@ -124,10 +126,12 @@ DATE_PATTERNS = [
 ADDRESS_PATTERNS = [
     # "123 Main Street, City" / "191 ATHALASSIS AVE., P.O.Box 25525, LEFKOSIA-CYPRUS"
     r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z \-]{2,40}(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:\s*,\s*(?:P\.O\.?\s*Box\s*\d+|[A-Za-z][A-Za-z \-]*[A-Za-z]))*',
-    # "str. Dourleion 16904/53" / "ul. Name 123"
-    r'(?i:\bstr\.\s+[A-Za-z][A-Za-z \-]+\d[\d/A-Za-z]*)',
+    # "str. Dourleion 16904/53" / "ul. Name 123" with optional next line for zip code and city
+    r'(?i:\b(?:str|ul)\.\s+[A-Za-z][A-Za-z \-]+\d[\d/A-Za-z]*(?:\s*[\n\r]+\s*\d{4,5}\s+[A-Za-z \-]+)?)',
     # UK postcode
     r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
+    # Multiline Address fallback (e.g. "82 Akropoleos, 2nd floor\n1012 Acropolis, Cyprus")
+    r'\b\d+\s+[A-Za-z][A-Za-z \-]+(?:,\s*\d+(?:st|nd|rd|th)?\s+floor)?\s*[\n\r]+\s*\d{4,5}\s+[A-Za-z][A-Za-z \-]+(?:,\s*[A-Za-z]+)?',
 ]
 
 # ===============================
@@ -463,11 +467,12 @@ CRITICAL RULES - what to extract:
   - If a person's name is used as a business/firm name, extract it as BOTH a person AND an organisation
 - ORGANISATIONS: Only actual named companies/firms
   - Extract ALL language variants of the same company
-  - Include companies in any language: English, Greek, Russian, French, German, etc.
+  - Include companies in any language: English, Greek, Russian (e.g., ООО, АО), French, German, etc.
 - DATES: Only specific calendar dates, like "01/09/2015", "24th of July, 2015"
   - Do NOT extract section or article numbers as dates (e.g. "2.2.11", "3.1.5" are section numbers, NOT dates)
 - ADDRESSES: Physical street/postal addresses in ANY language
   - Extract addresses from EVERYWHERE: signature pages, witness sections, headers, body text
+  - Make sure to extract multiple lines if the address spans multiple lines (including floor numbers, postcodes, and cities)
   - Addresses can be in any format and any language
   - Do NOT extract sentence fragments that happen to mention numbers
 - PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
