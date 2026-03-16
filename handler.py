@@ -29,7 +29,7 @@ torch.backends.cudnn.benchmark = True
 # ===============================
 # DOWNLOAD & LOAD MODEL
 # ===============================
-MODEL_ID = "Qwen/Qwen3-32B-Instruct"
+MODEL_ID = "Qwen/Qwen3-32B"
 MODEL_PATH = "/runpod-volume/models/qwen"
 
 # Auto-download to network volume on first start
