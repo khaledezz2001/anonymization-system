@@ -32,16 +32,20 @@ torch.backends.cudnn.benchmark = True
 MODEL_ID = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 MODEL_PATH = f"/runpod-volume/models/{MODEL_ID.replace('/', '_')}"
 
-# Auto-download to network volume on first start
-log(f"Ensuring model {MODEL_ID} is downloaded to {MODEL_PATH}...")
-os.makedirs(MODEL_PATH, exist_ok=True)
-snapshot_download(
-    repo_id=MODEL_ID,
-    local_dir=MODEL_PATH,
-    local_dir_use_symlinks=False,
-    resume_download=True
-)
-log("Model is present on volume.")
+# Auto-download to network volume on first start (skip if already present)
+model_config = os.path.join(MODEL_PATH, "config.json")
+if os.path.exists(model_config):
+    log(f"Model already present at {MODEL_PATH}, skipping download.")
+else:
+    log(f"Model not found at {MODEL_PATH}, downloading {MODEL_ID}...")
+    os.makedirs(MODEL_PATH, exist_ok=True)
+    snapshot_download(
+        repo_id=MODEL_ID,
+        local_dir=MODEL_PATH,
+        local_dir_use_symlinks=False,
+        resume_download=True
+    )
+    log("Model download complete.")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(
