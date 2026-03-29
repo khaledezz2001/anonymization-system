@@ -834,7 +834,7 @@ def anonymize_document(pages):
             seen_a.add(a.lower())
             unique_addresses.append(a)
     unique_addresses = dedup_substrings(unique_addresses)
-    )
+    
 
     # Deduplicate phones (LLM + regex)
     seen_ph = set()
