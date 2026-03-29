@@ -556,11 +556,11 @@ def extract_entities_llm(text_chunk):
         phones = [p.strip() for p in result.get("phones", []) if p and p.strip()]
         reg_ids = [r.strip() for r in result.get("registration_ids", []) if r and r.strip()]
         bank_accounts = [b.strip() for b in result.get("bank_accounts", []) if b and b.strip()]
-        log(f"LLM extracted: {len(persons)}p {len(organizations)}o {len(dates)}d {len(addresses)}a {len(phones)}ph {len(reg_ids)}reg {len(bank_accounts)}bank")
+        
         return persons, organizations, dates, addresses, phones, reg_ids, bank_accounts
     except (json.JSONDecodeError, AttributeError) as e:
         log(f"Parse failed: {e}")
-        log(f"Cleaned output was: {cleaned_output[:1000]}")
+        
         return [], [], [], [], [], [], []
 
 
@@ -574,7 +574,7 @@ def detect_companies_regex(text):
             clean = match.group().strip()
             if clean and clean not in organizations:
                 organizations.append(clean)
-    log(f"Regex found {len(organizations)} orgs")
+    
     return organizations
 
 
@@ -723,7 +723,7 @@ def merge_entities(llm_persons, llm_orgs, regex_orgs):
             seen_o.add(norm)
             organizations.append(n)
 
-    log(f"After validation: {len(persons)} persons, {len(organizations)} orgs")
+    
     return persons, organizations
 
 
@@ -760,7 +760,7 @@ def build_ordered_mapping(full_text, person_groups, org_groups):
     for entity, ph in mapping.items():
         if ph not in shown:
             shown.add(ph)
-            log(f"  {ph} <- {entity}")
+            
 
     return mapping
 
@@ -823,7 +823,7 @@ def anonymize_document(pages):
             seen_d.add(d.lower())
             unique_dates.append(d)
     unique_dates = dedup_substrings(unique_dates)
-    log(f"Dates: {len(unique_dates)} unique")
+    
 
     # Deduplicate addresses (LLM + regex)
     seen_a = set()
@@ -834,7 +834,7 @@ def anonymize_document(pages):
             seen_a.add(a.lower())
             unique_addresses.append(a)
     unique_addresses = dedup_substrings(unique_addresses)
-    log(f"Addresses: {len(unique_addresses)} unique")
+    )
 
     # Deduplicate phones (LLM + regex)
     seen_ph = set()
@@ -845,12 +845,12 @@ def anonymize_document(pages):
             seen_ph.add(ph.lower())
             unique_phones.append(ph)
     unique_phones = dedup_substrings(unique_phones)
-    log(f"Phones: {len(unique_phones)} unique")
+    
 
     # Group variants
     person_groups = group_person_variants(persons)
     org_groups = group_org_variants(organizations)
-    log(f"Grouped: {len(person_groups)} person groups, {len(org_groups)} org groups")
+    
 
     mapping = build_ordered_mapping(full_text, person_groups, org_groups)
 
@@ -902,7 +902,7 @@ def anonymize_document(pages):
             seen_bank.add(ba.lower())
             unique_bank_accounts.append(ba)
     unique_bank_accounts = dedup_substrings(unique_bank_accounts)
-    log(f"Bank accounts: {len(unique_bank_accounts)} unique")
+    
 
     bank_account_map = {}
     for i, ba in enumerate(sorted(unique_bank_accounts, key=find_first_pos), 1):
@@ -910,19 +910,19 @@ def anonymize_document(pages):
 
     log(f"Date mapping: {len(date_map)} entries")
     for orig, ph in date_map.items():
-        log(f"  {ph} <- {orig}")
+        
     log(f"Address mapping: {len(addr_map)} entries")
     for orig, ph in addr_map.items():
-        log(f"  {ph} <- {orig}")
+        
     log(f"Phone mapping: {len(phone_map)} entries")
     for orig, ph in phone_map.items():
-        log(f"  {ph} <- {orig}")
+        
     log(f"Reg ID mapping: {len(reg_id_map)} entries")
     for orig, ph in reg_id_map.items():
-        log(f"  {ph} <- {orig}")
+       
     log(f"Bank account mapping: {len(bank_account_map)} entries")
     for orig, ph in bank_account_map.items():
-        log(f"  {ph} <- {orig}")
+        
 
     # Build person name patterns
     name_patterns = build_person_patterns(person_groups, mapping) if mapping else []
