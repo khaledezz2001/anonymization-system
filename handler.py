@@ -2,7 +2,7 @@ import runpod
 import torch
 import re
 import json
-import time
+
 import gc
 import os
 
@@ -10,17 +10,9 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-def log(msg):
-    print(f"[LOG] {msg}", flush=True)
-
-
 # ===============================
 # CUDA SETUP
 # ===============================
-log("Starting anonymization worker")
-log(f"CUDA available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    log(f"GPU: {torch.cuda.get_device_name(0)}")
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -35,9 +27,9 @@ MODEL_PATH = f"/runpod-volume/models/{MODEL_ID.replace('/', '_')}"
 # Auto-download to network volume on first start (skip if already present)
 model_config = os.path.join(MODEL_PATH, "config.json")
 if os.path.exists(model_config):
-    log(f"Model already present at {MODEL_PATH}, skipping download.")
+    pass
 else:
-    log(f"Model not found at {MODEL_PATH}, downloading {MODEL_ID}...")
+
     os.makedirs(MODEL_PATH, exist_ok=True)
     snapshot_download(
         repo_id=MODEL_ID,
@@ -45,7 +37,7 @@ else:
         local_dir_use_symlinks=False,
         resume_download=True
     )
-    log("Model download complete.")
+
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(
@@ -55,7 +47,8 @@ model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True
 )
 model.eval()
-log(f"{MODEL_ID} loaded")
+print(f"[LOG] {MODEL_ID} loaded", flush=True)
+
 
 
 # ===============================
@@ -446,7 +439,7 @@ def chunk_text_with_overlap(text, max_tokens=4500, overlap_tokens=200):
         if end >= len(tokens):
             break
         start += max_tokens - overlap_tokens
-    log(f"Split into {len(chunks)} chunks ({len(tokens)} tokens total)")
+
     return chunks
 
 
@@ -537,12 +530,11 @@ def extract_entities_llm(text_chunk):
 
     raw_output = tokenizer.decode(output[0][prompt_len:], skip_special_tokens=True).strip()
     del output
-    log(f"LLM raw (first 500): {raw_output[:500]}")
+
 
     # Strip any <think> blocks (safety net for thinking models)
     cleaned_output = strip_thinking(raw_output)
-    if cleaned_output != raw_output:
-        log(f"Stripped think tags, cleaned (first 500): {cleaned_output[:500]}")
+
 
     try:
         json_match = re.search(r'\{[^{}]*"persons"\s*:.*\}', cleaned_output, re.DOTALL)
@@ -556,11 +548,10 @@ def extract_entities_llm(text_chunk):
         phones = [p.strip() for p in result.get("phones", []) if p and p.strip()]
         reg_ids = [r.strip() for r in result.get("registration_ids", []) if r and r.strip()]
         bank_accounts = [b.strip() for b in result.get("bank_accounts", []) if b and b.strip()]
-        
+
         return persons, organizations, dates, addresses, phones, reg_ids, bank_accounts
     except (json.JSONDecodeError, AttributeError) as e:
-        log(f"Parse failed: {e}")
-        
+
         return [], [], [], [], [], [], []
 
 
@@ -574,7 +565,7 @@ def detect_companies_regex(text):
             clean = match.group().strip()
             if clean and clean not in organizations:
                 organizations.append(clean)
-    
+
     return organizations
 
 
@@ -723,7 +714,7 @@ def merge_entities(llm_persons, llm_orgs, regex_orgs):
             seen_o.add(norm)
             organizations.append(n)
 
-    
+
     return persons, organizations
 
 
@@ -755,12 +746,7 @@ def build_ordered_mapping(full_text, person_groups, org_groups):
         for v in variants:
             mapping[v] = placeholder
 
-    log(f"Mapping ({len(mapping)} entries):")
-    shown = set()
-    for entity, ph in mapping.items():
-        if ph not in shown:
-            shown.add(ph)
-            
+
 
     return mapping
 
@@ -769,11 +755,9 @@ def build_ordered_mapping(full_text, person_groups, org_groups):
 # MAIN ANONYMIZATION PIPELINE
 # ===============================
 def anonymize_document(pages):
-    total_start = time.time()
-    log(f"Processing {len(pages)} pages")
 
     full_text = combine_pages(pages)
-    log(f"Combined: {len(full_text)} chars")
+
 
     chunks = chunk_text_with_overlap(full_text)
 
@@ -786,10 +770,7 @@ def anonymize_document(pages):
         }
 
     all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts = [], [], [], [], [], [], []
-    ner_start = time.time()
     for i, chunk in enumerate(chunks):
-        t = time.time()
-        log(f"Chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
         persons, orgs, dates, addresses, phones, reg_ids, bank_accounts = extract_entities_llm(chunk)
         all_persons.extend(persons)
         all_orgs.extend(orgs)
@@ -798,12 +779,12 @@ def anonymize_document(pages):
         all_phones.extend(phones)
         all_reg_ids.extend(reg_ids)
         all_bank_accounts.extend(bank_accounts)
-        log(f"Chunk {i+1} done in {time.time()-t:.1f}s")
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             gc.collect()
 
-    log(f"NER done in {time.time()-ner_start:.1f}s — {len(all_persons)}p {len(all_orgs)}o {len(all_dates)}d {len(all_addresses)}a {len(all_phones)}ph {len(all_reg_ids)}reg {len(all_bank_accounts)}bank (raw)")
+
 
     # Regex fallback: catch anything the LLM missed
     regex_orgs = detect_companies_regex(full_text)
@@ -823,7 +804,7 @@ def anonymize_document(pages):
             seen_d.add(d.lower())
             unique_dates.append(d)
     unique_dates = dedup_substrings(unique_dates)
-    
+
 
     # Deduplicate addresses (LLM + regex)
     seen_a = set()
@@ -834,7 +815,7 @@ def anonymize_document(pages):
             seen_a.add(a.lower())
             unique_addresses.append(a)
     unique_addresses = dedup_substrings(unique_addresses)
-    
+
 
     # Deduplicate phones (LLM + regex)
     seen_ph = set()
@@ -845,12 +826,12 @@ def anonymize_document(pages):
             seen_ph.add(ph.lower())
             unique_phones.append(ph)
     unique_phones = dedup_substrings(unique_phones)
-    
+
 
     # Group variants
     person_groups = group_person_variants(persons)
     org_groups = group_org_variants(organizations)
-    
+
 
     mapping = build_ordered_mapping(full_text, person_groups, org_groups)
 
@@ -902,27 +883,13 @@ def anonymize_document(pages):
             seen_bank.add(ba.lower())
             unique_bank_accounts.append(ba)
     unique_bank_accounts = dedup_substrings(unique_bank_accounts)
-    
+
 
     bank_account_map = {}
     for i, ba in enumerate(sorted(unique_bank_accounts, key=find_first_pos), 1):
         bank_account_map[ba] = f"[BANK_ACCOUNT{i}]"
 
-    log(f"Date mapping: {len(date_map)} entries")
-    for orig, ph in date_map.items():
-        
-    log(f"Address mapping: {len(addr_map)} entries")
-    for orig, ph in addr_map.items():
-        
-    log(f"Phone mapping: {len(phone_map)} entries")
-    for orig, ph in phone_map.items():
-        
-    log(f"Reg ID mapping: {len(reg_id_map)} entries")
-    for orig, ph in reg_id_map.items():
-       
-    log(f"Bank account mapping: {len(bank_account_map)} entries")
-    for orig, ph in bank_account_map.items():
-        
+
 
     # Build person name patterns
     name_patterns = build_person_patterns(person_groups, mapping) if mapping else []
@@ -962,8 +929,7 @@ def anonymize_document(pages):
     display_mapping.update(reg_id_map)
     display_mapping.update(bank_account_map)
 
-    total = time.time() - total_start
-    log(f"Done in {total:.1f}s — {len(display_mapping)} entities across {len(pages)} pages")
+
     return {"pages": anonymized_pages, "mapping": display_mapping}
 
 
@@ -982,7 +948,7 @@ def handler(event):
     except KeyError as e:
         return {"error": f"Missing field: {e}"}
     except Exception as e:
-        log(f"Error: {e}")
+
         return {"error": str(e)}
 
 
