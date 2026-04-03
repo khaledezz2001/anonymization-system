@@ -78,6 +78,40 @@ GENERIC_TERMS_LOWER = {
     'government', 'state', 'republic', 'authority',
     'cyprus', 'belize', 'republic of cyprus', 'united kingdom',
     'united states', 'germany', 'france', 'spain', 'italy',
+    # Company descriptor roles — not actual company names
+    'company incorporated', 'company formed', 'company registered',
+}
+
+
+# ===============================
+# BLACKLIST: known non-company entities (gov bodies, regulations, etc.)
+# ===============================
+KNOWN_NON_COMPANY_LOWER = {
+    # Government / intergovernmental bodies
+    'fatf', 'financial action task force',
+    'european commission', 'european parliament',
+    'european banking authority', 'european central bank',
+    'european securities and markets authority',
+    'european council', 'council of the european union',
+    'united nations', 'un', 'imf', 'international monetary fund',
+    'world bank', 'oecd',
+    'mokas', 'unit for combating money laundering',
+    # Regulatory bodies (generic — the specific CySEC etc. are real orgs but
+    # CySEC is aliased to the full name which is the real company to anonymize)
+    # Jurisdictions / geographic areas that are NOT companies
+    'bvi', 'british virgin islands',
+    'european economic area', 'eea',
+    'european union', 'eu',
+    # Regulations / directives / guidelines — NOT company names
+    'eba guidelines', 'eba guideline',
+    'fatf recommendations',
+    'general data protection regulation',
+    'general data protection regulation (gdpr)',
+    'gdpr',
+    'basel aml index',
+    # Common regulatory directive patterns caught as orgs
+    'pep as ubo or being incorporated',
+    'directors of altus citadel corporate services limited',
 }
 
 
@@ -206,6 +240,45 @@ def validate_entity(name):
     return True
 
 
+def validate_organization(name):
+    """Additional validation for organisations beyond validate_entity.
+    Rejects known non-company entities (government bodies, regulations, etc.)"""
+    name = name.strip()
+    name_lower = name.lower()
+
+    # Check the known non-company blacklist
+    if name_lower in KNOWN_NON_COMPANY_LOWER:
+        return False
+
+    # Reject EU directive / regulation patterns:
+    # "Directive (EU) 2018/843", "Directive 2018/1673", "Regulation (EU) No. 833/2014"
+    if re.match(r'(?i)^(?:directive|regulation|council\s+regulation)', name):
+        return False
+
+    # Reject if it's a role description like "Directors of Company Name"
+    if re.match(r'(?i)^(?:directors?|officers?|members?|trustees?)\s+of\s+', name):
+        return False
+
+    # Reject "Provision of ..." type fragments
+    if re.match(r'(?i)^(?:provision|provisions?)\s+of\s+', name):
+        return False
+
+    # Reject fragments starting with a number followed by a period/dot and text
+    # like "5. Provision of general or limited"
+    if re.match(r'^\d+\.\s+', name):
+        return False
+
+    # Reject "PEP as UBO" type fragments
+    if 'pep' in name_lower and 'ubo' in name_lower:
+        return False
+
+    # Reject "Company incorporated" / "Company formed" fragments
+    if re.match(r'(?i)^company\s+(?:incorporated|formed|registered)', name):
+        return False
+
+    return True
+
+
 def validate_date(date_str):
     date_str = date_str.strip()
     if len(date_str) < 4:
@@ -217,6 +290,15 @@ def validate_date(date_str):
     if re.fullmatch(r'\d{4}', date_str):
         return False
     if not any(c.isdigit() for c in date_str):
+        return False
+
+    # Reject quarter references: "Q1 2024", "Q2 2024", etc.
+    if re.fullmatch(r'(?i)Q[1-4]\s+\d{4}', date_str):
+        return False
+
+    # Reject directive/regulation references: "2015/849", "2021/02"
+    # These are EU directive numbers, not dates
+    if re.fullmatch(r'\d{4}/\d{1,4}', date_str):
         return False
 
     # Reject section/article numbers like "2.2.11", "1.3.5", "10.2.1"
@@ -251,6 +333,11 @@ def validate_address(addr_str):
 
     addr_lower = addr_str.lower()
 
+    # Reject anything containing newlines — these are page number + section header fragments
+    # e.g. "4\n\nINTRODUCTION", "10\n\nInspections"
+    if '\n' in addr_str or '\r' in addr_str:
+        return False
+
     # Reject obvious sentence fragments (legal/contract language)
     reject_phrases = [
         'shall', 'will be', 'would', 'should', 'could', 'must',
@@ -270,6 +357,22 @@ def validate_address(addr_str):
         'registered office', 'memorandum', 'constitution',
         'paragraph', 'sub-clause', 'schedule', 'appendix', 'annex',
         'approval', 'consent', 'notice of', 'right to',
+        # Additional reject phrases for common false positives
+        'risk cust', 'risk custom', 'risks',
+        'clients onboard', 'client onboard',
+        'chapter', 'directive', 'inspect',
+        'categoriz', 'categori', 'implementat', 'implement',
+        'ongoing monitoring', 'on-going monitoring',
+        'record', 'keeping', 'document',
+        'communicat', 'employ', 'protect',
+        'structure', 'staffi', 'staff',
+        'introduc', 'suggest', 'key issues',
+        'compl', 'compli',
+        'data protect', 'money laundering',
+        'reliab', 'reliance',
+        'framework', 'inter',
+        'provision', 'partner',
+        'fatf', 'jurisdict',
     ]
     for phrase in reject_phrases:
         if phrase in addr_lower:
@@ -281,6 +384,47 @@ def validate_address(addr_str):
 
     # Reject if it looks like a date fragment
     if re.match(r'^\d{1,2}/\d{2,4}\b', addr_str):
+        return False
+
+    # Reject if it starts with a small number followed by a space and non-address text
+    # e.g. "1 year for high risk cust", "2 clients onboarded", "3 years for low risk"
+    # But allow "123 Main Street" (3+ digit house numbers, or number followed by address words)
+    _address_indicator_words = {
+        'street', 'st', 'avenue', 'ave', 'road', 'rd', 'boulevard', 'blvd',
+        'lane', 'ln', 'drive', 'dr', 'court', 'ct', 'place', 'pl',
+        'square', 'sq', 'way', 'crescent', 'cres', 'close', 'terrace', 'ter',
+        'parkway', 'pkwy', 'floor', 'flat', 'apartment', 'apt', 'suite', 'ste',
+        'building', 'bldg', 'block', 'unit', 'office',
+        'p.o.', 'po', 'box', 'p.o', 'postcode', 'zip',
+    }
+    start_match = re.match(r'^(\d{1,2})\s+(\w+)', addr_str)
+    if start_match:
+        num = int(start_match.group(1))
+        next_word = start_match.group(2).lower().rstrip('.')
+        # Small numbers (1-99) followed by non-address words = not an address
+        if num < 100 and next_word not in _address_indicator_words:
+            return False
+
+    # Reject text that looks like "8 and Chapter VI" — reference fragments
+    if re.match(r'^\d+\s+and\s+', addr_str, re.IGNORECASE):
+        return False
+
+    # Must contain at least one address-like indicator to be considered an address
+    _addr_evidence = [
+        'street', 'st.', 'avenue', 'ave.', 'road', 'rd.', 'boulevard', 'blvd.',
+        'lane', 'ln.', 'drive', 'dr.', 'court', 'ct.', 'place', 'pl.',
+        'floor', 'flat', 'apartment', 'apt', 'suite', 'ste',
+        'p.o. box', 'p.o.box', 'po box', 'postcode',
+        'building', 'bldg', 'block', 'unit',
+        'str.', 'ul.',
+    ]
+    # Also check for postal code patterns (4-6 digit sequences typical of postcodes)
+    has_postcode = bool(re.search(r'\b\d{4,6}\b', addr_str))
+    has_addr_word = any(w in addr_lower for w in _addr_evidence)
+
+    # If it has neither a postcode nor an address-specific word, reject it
+    # UNLESS it was caught by a very specific address regex pattern
+    if not has_postcode and not has_addr_word:
         return False
 
     return True
@@ -462,16 +606,17 @@ CRITICAL RULES - what to extract:
   - Extract person names EVEN when they appear in an official capacity
   - Extract person names from witnesses, signatories, advocates
   - If a person's name is used as a business/firm name, extract it as BOTH a person AND an organisation
-- ORGANISATIONS: Only actual named companies/firms
+- ORGANISATIONS: Only actual named companies/firms that are REGISTERED BUSINESS ENTITIES
   - Extract ALL language variants of the same company
   - Include companies in any language: English, Greek, Russian (e.g., ООО, АО), French, German, etc.
+  - A company must be a specific legal entity (e.g., "Altus Citadel Corporate Services Limited")
 - DATES: Only specific calendar dates, like "01/09/2015", "24th of July, 2015"
   - Do NOT extract section or article numbers as dates (e.g. "2.2.11", "3.1.5" are section numbers, NOT dates)
-- ADDRESSES: Physical street/postal addresses in ANY language
+- ADDRESSES: ONLY physical street/postal addresses with specific location details
+  - An address MUST contain a street name, building number, postcode, or similar location identifier
+  - Example addresses: "82 Akropoleos, 2nd floor, 1012 Acropolis, Cyprus", "191 ATHALASSIS AVE."
   - Extract addresses from EVERYWHERE: signature pages, witness sections, headers, body text
-  - Make sure to extract multiple lines if the address spans multiple lines (including floor numbers, postcodes, and cities)
   - Addresses can be in any format and any language
-  - Do NOT extract sentence fragments that happen to mention numbers
 - PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
 - REGISTRATION IDS: Any company or entity identification numbers
   - Examples: "H.E.107777", "HE317807", "HRB 12345", "Company No. 12345678", "Reg. No. 123456", "Tax ID 123456"
@@ -482,11 +627,22 @@ CRITICAL RULES - what to extract:
 CRITICAL RULES - what NOT to extract:
 - Do NOT extract role titles as persons: Chairman, Director, Secretary, Landlord, Tenant
 - Do NOT extract generic legal terms as organisations: "the Company", "Board of Directors"
+- Do NOT extract GOVERNMENT BODIES, INTERGOVERNMENTAL ORGANIZATIONS, or REGULATORY AUTHORITIES as organisations.
+  These are NOT companies: "European Commission", "European Banking Authority", "FATF", "Financial Action Task Force", "United Nations", "MOKAS", "Unit for Combating Money Laundering"
+- Do NOT extract EU DIRECTIVES or REGULATIONS as organisations.
+  These are NOT companies: "Directive (EU) 2018/843", "Directive 2018/1673", "Council Regulation (EU) No. 833/2014", "General Data Protection Regulation (GDPR)", "EBA Guidelines"
+- Do NOT extract COUNTRIES, JURISDICTIONS, or GEOGRAPHIC AREAS as organisations: "BVI", "European Economic Area"
+- Do NOT extract INDICES or REPORTS as organisations: "Basel AML Index"
 - Do NOT extract countries alone as organisations
 - Do NOT extract time durations as dates: "fourteen days", "six months"
 - Do NOT extract bare years as dates: "2014" alone is NOT a date
+- Do NOT extract quarter references as dates: "Q2 2024" alone is a period, not a specific date
 - Do NOT extract section/article numbers as dates: "2.2.11", "3.1.5" are NOT dates
 - Do NOT extract sentence fragments as addresses
+- Do NOT extract page numbers or section headers as addresses (e.g. "4 INTRODUCTION" is NOT an address)
+- Do NOT extract duration phrases as addresses (e.g. "1 year for high risk customers" is NOT an address)
+- Do NOT extract counts or quantities as addresses (e.g. "2 clients onboarded" is NOT an address)
+- Do NOT extract legal references as addresses (e.g. "8 and Chapter VI of Directive" is NOT an address)
 - Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
 
 Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
@@ -710,7 +866,7 @@ def merge_entities(llm_persons, llm_orgs, regex_orgs):
     for o in llm_orgs + regex_orgs:
         n = o.strip()
         norm = n.rstrip('. ').lower()
-        if n and norm not in seen_o and validate_entity(n):
+        if n and norm not in seen_o and validate_entity(n) and validate_organization(n):
             seen_o.add(norm)
             organizations.append(n)
 
