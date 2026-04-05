@@ -18,6 +18,14 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 
+# GPU diagnostics
+if torch.cuda.is_available():
+    print(f"[GPU] Device: {torch.cuda.get_device_name(0)}", flush=True)
+    print(f"[GPU] Compute capability: {torch.cuda.get_device_capability(0)}", flush=True)
+    print(f"[GPU] CUDA arch list: {torch.cuda.get_arch_list()}", flush=True)
+else:
+    print("[GPU] WARNING: No CUDA device available!", flush=True)
+
 # ===============================
 # DOWNLOAD & LOAD MODEL
 # ===============================
