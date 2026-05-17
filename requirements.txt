@@ -1,7 +1,7 @@
 # =========================
 # LLM + Runtime
 # =========================
-vllm>=0.15.0
+vllm>=0.15.0,<0.20.0
 transformers>=4.43.0
 sentencepiece>=0.1.99
 huggingface_hub>=0.20.3
