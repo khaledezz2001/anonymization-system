@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 # ===============================
 # LOAD MODEL WITH vLLM
 # ===============================
-MODEL_PATH = "/app/models/Qwen3-14B"
+MODEL_PATH = "/app/models/Mistral-Nemo-Instruct-2407"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 
@@ -28,7 +28,7 @@ SAMPLING_PARAMS = SamplingParams(
     repetition_penalty=1.1,
 )
 
-print(f"[LOG] Qwen/Qwen3-14B loaded via vLLM", flush=True)
+print(f"[LOG] Mistral-Nemo-Instruct-2407 loaded via vLLM", flush=True)
 
 
 # ===============================
@@ -90,6 +90,7 @@ MAX_CHUNKS = 120   # 40 pages ≈ 40-50 chunks at 3000 tok/chunk — give headro
 
 
 SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assistant for legal and business documents.
+You MUST extract entities in ALL languages and scripts, including but not limited to: English, Russian (Cyrillic), Greek, Arabic, French, German, Turkish, and any other language present.
 
 Extract ALL of the following from the text:
 1. Person names (actual human names only)
@@ -103,12 +104,18 @@ Extract ALL of the following from the text:
 
 CRITICAL RULES - what to extract:
 - PERSONS: Only real human names, like "John Smith", "Andreas Menelaou"
+  - Extract person names in ALL scripts and languages:
+    - Russian: "Борис Грановский", "Зверев Павел Александрович", "В.А. Король"
+    - Greek: "Γεώργιος Τσιφραρίδης", "Ανδρέας Μενελάου"
+    - English: "John Smith", "Maria Johnson"
+    - Names with initials: "В.А. Король", "J.P. Morgan"
   - Extract person names EVEN when they appear in an official capacity
-  - Extract person names from witnesses, signatories, advocates
+  - Extract person names from witnesses, signatories, advocates, directors, shareholders
   - If a person's name is used as a business/firm name, extract it as BOTH a person AND an organisation
+  - Extract ALL variants/transliterations of the same person (e.g. "Georgios Tsifrarides" AND "Георгиос Трифтаридес")
 - ORGANISATIONS: Only actual named companies/firms that are REGISTERED BUSINESS ENTITIES
   - Extract ALL language variants of the same company
-  - Include companies in any language: English, Greek, Russian (e.g., ООО, АО), French, German, etc.
+  - Include companies in any language: English, Greek, Russian (e.g., ООО, АО, ЗАО), French, German, etc.
   - A company must be a specific legal entity (e.g., "Altus Citadel Corporate Services Limited")
 - DATES: Only specific calendar dates, like "01/09/2015", "24th of July, 2015"
   - Do NOT extract section or article numbers as dates (e.g. "2.2.11", "3.1.5" are section numbers, NOT dates)
@@ -149,7 +156,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
 - Do NOT extract URLs or website domain names as email addresses (e.g. "www.example.com" is NOT an email)
 
-Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
+Output ONLY valid JSON with no explanation. Do not wrap in markdown code blocks.
 
 {
   "persons": ["name1", "name2"],
@@ -195,7 +202,7 @@ def extract_entities_batch(chunks):
                 {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, phones, registration IDs, bank accounts, and emails:\n\n{chunk}"}
             ]
             prompt = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+                messages, tokenize=False, add_generation_prompt=True
             )
             prompts.append(prompt)
 
