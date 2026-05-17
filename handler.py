@@ -1,575 +1,34 @@
 import runpod
-import torch
 import re
 import json
-
-import gc
 import os
 
-from huggingface_hub import snapshot_download
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from vllm import LLM, SamplingParams
+from transformers import AutoTokenizer
 
 
 # ===============================
-# CUDA SETUP
+# LOAD MODEL WITH vLLM
 # ===============================
+MODEL_PATH = "/app/models/Qwen3-14B"
 
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-torch.backends.cudnn.benchmark = True
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 
-# GPU diagnostics
-if torch.cuda.is_available():
-    print(f"[GPU] Device: {torch.cuda.get_device_name(0)}", flush=True)
-    print(f"[GPU] Compute capability: {torch.cuda.get_device_capability(0)}", flush=True)
-    print(f"[GPU] CUDA arch list: {torch.cuda.get_arch_list()}", flush=True)
-else:
-    print("[GPU] WARNING: No CUDA device available!", flush=True)
-
-# ===============================
-# DOWNLOAD & LOAD MODEL
-# ===============================
-MODEL_ID = "Qwen/Qwen3-30B-A3B-Instruct-2507"
-MODEL_PATH = f"/runpod-volume/models/{MODEL_ID.replace('/', '_')}"
-
-# Auto-download to network volume on first start (skip if already present)
-model_config = os.path.join(MODEL_PATH, "config.json")
-if os.path.exists(model_config):
-    pass
-else:
-
-    os.makedirs(MODEL_PATH, exist_ok=True)
-    snapshot_download(
-        repo_id=MODEL_ID,
-        local_dir=MODEL_PATH,
-        local_dir_use_symlinks=False,
-        resume_download=True
-    )
-
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_PATH,
-    dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-    device_map="auto",
-    trust_remote_code=True
-)
-model.eval()
-print(f"[LOG] {MODEL_ID} loaded", flush=True)
-
-
-
-# ===============================
-# BLACKLIST: generic legal terms that are NOT entity names
-# ===============================
-GENERIC_TERMS_LOWER = {
-    'company', 'companies', 'the company', 'the companies',
-    'party', 'parties', 'the party', 'the parties',
-    'borrower', 'lender', 'lessor', 'lessee', 'tenant', 'landlord',
-    'client', 'contractor', 'counterparty', 'agent', 'principal',
-    'employer', 'employee', 'vendor', 'buyer', 'seller', 'purchaser',
-    'assignor', 'assignee', 'guarantor', 'beneficiary',
-    'director', 'directors', 'general director', 'ceo', 'shareholder', 'shareholders',
-    'authorized person', 'representative', 'signatory',
-    'group company', 'group companies', 'subsidiary', 'subsidiaries',
-    'chairman', 'secretary', 'treasurer', 'president', 'vice president',
-    'manager', 'administrator', 'auditor', 'inspector', 'officer',
-    'member', 'members', 'board', 'board of directors', 'committee',
-    'trustee', 'trustees', 'receiver', 'liquidator', 'executor',
-    'personal representative', 'personal representatives',
-    'curator bonis', 'requisitionists', 'proxy',
-    'parent', 'child', 'children', 'spouse', 'husband', 'wife',
-    'brother', 'sister', 'mother', 'father', 'son', 'daughter',
-    'widow', 'widower', 'deceased', 'heir', 'heirs',
-    'remote issue', 'issue',
-    'registrar of companies', 'ministry', 'court', 'tribunal',
-    'government', 'state', 'republic', 'authority',
-    'cyprus', 'belize', 'republic of cyprus', 'united kingdom',
-    'united states', 'germany', 'france', 'spain', 'italy',
-    # Company descriptor roles — not actual company names
-    'company incorporated', 'company formed', 'company registered',
-}
-
-
-# ===============================
-# BLACKLIST: known non-company entities (gov bodies, regulations, etc.)
-# ===============================
-KNOWN_NON_COMPANY_LOWER = {
-    # Government / intergovernmental bodies
-    'fatf', 'financial action task force',
-    'european commission', 'european parliament',
-    'european banking authority', 'european central bank',
-    'european securities and markets authority',
-    'european council', 'council of the european union',
-    'united nations', 'un', 'imf', 'international monetary fund',
-    'world bank', 'oecd',
-    'mokas', 'unit for combating money laundering',
-    # Regulatory bodies (generic — the specific CySEC etc. are real orgs but
-    # CySEC is aliased to the full name which is the real company to anonymize)
-    # Jurisdictions / geographic areas that are NOT companies
-    'bvi', 'british virgin islands',
-    'european economic area', 'eea',
-    'european union', 'eu',
-    # Regulations / directives / guidelines — NOT company names
-    'eba guidelines', 'eba guideline',
-    'fatf recommendations',
-    'general data protection regulation',
-    'general data protection regulation (gdpr)',
-    'gdpr',
-    'basel aml index',
-    # Common regulatory directive patterns caught as orgs
-    'pep as ubo or being incorporated',
-    'directors of altus citadel corporate services limited',
-}
-
-
-# ===============================
-# REGEX PATTERNS FOR COMPANIES
-# ===============================
-COMPANY_FULL_PATTERNS = [
-    # English / international legal forms
-    r'[A-Z0-9][A-Za-z0-9&\'\-\.]+(?:\s+[A-Za-z0-9&\'\-\.]+)*\s+(?i:Ltd\.?|Limited|LLC|L\.L\.C\.?|LLD\.?|LLP|L\.L\.P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|PLC|P\.L\.C\.?|Public\s+Ltd\.?|Public\s+Limited)(?=\s|[,;\.]|$)',
-    # European legal forms
-    r'[A-Z\u00c0-\u00d60-9][A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff0-9]+(?:\s+[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff0-9]+)*\s+(?:(?i:GmbH|AG|KG|OHG|GbR|S\.?A\.?R?\.?L?\.?|SAS|S\.?A\.?S\.?|S\.?L\.?|S\.?p\.?A\.?|S\.?r\.?l\.?|N\.?V\.?|B\.?V\.?|Pty\.?\s*Ltd\.?|Oy|ApS)|A\.?S\.?|A/S|AB)(?=\s|[,;\.]|$)',
-    # Russian/Cyrillic legal forms (ООО, АО, ЗАО, ПАО, ОАО, etc.)
-    r'(?:ООО|АО|ЗАО|ПАО|ОАО)\s*«[^»]+»',
-]
-
-
-# ===============================
-# REGEX PATTERNS FOR DATES
-# ===============================
-_EN_MONTHS = (
-    r'(?:January|February|March|April|May|June|July|August|September|October|November|December'
-    r'|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)'
+llm = LLM(
+    model=MODEL_PATH,
+    dtype="float16",
+    max_model_len=16384,        # Increased: long docs need more context room
+    tensor_parallel_size=int(os.environ.get("TP_SIZE", "1")),
+    gpu_memory_utilization=0.90,
 )
 
-DATE_PATTERNS = [
-    r'\b\d{4}-\d{2}-\d{2}\b',
-    r'\b\d{1,2}[.\/\-]\d{1,2}[.\/\-]\d{4}\b',
-    r'\b\d{1,2}[.\/\-]\d{1,2}[.\/\-]\d{2}\b',
-    r'\b\d{1,2}\s+' + _EN_MONTHS + r'\.?\s+\d{2,4}\b',
-    r'\b' + _EN_MONTHS + r'\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b',
-    r'\b' + _EN_MONTHS + r'\.?\s+\d{4}\b',
-    r'\b\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}\b',
-    # "15th day of March, 2022" / "1st day of January, 2020"
-    r'\b\d{1,2}(?:st|nd|rd|th)\s+day\s+of\s+' + _EN_MONTHS + r',?\s+\d{4}\b',
-    # "24th of July, 2015" / "1st of January 2020"
-    r'\b\d{1,2}(?:st|nd|rd|th)\s+of\s+' + _EN_MONTHS + r',?\s+\d{4}\b',
-]
+SAMPLING_PARAMS = SamplingParams(
+    temperature=0,          # greedy decoding
+    max_tokens=4096,        # Increased: dense docs produce many entities
+    repetition_penalty=1.1,
+)
 
-
-# ===============================
-# REGEX PATTERNS FOR ADDRESSES
-# ===============================
-ADDRESS_PATTERNS = [
-    # "123 Main Street, City" / "191 ATHALASSIS AVE., P.O.Box 25525, LEFKOSIA-CYPRUS"
-    r'\b\d+[A-Za-z]?(?:\s*[-/]\s*\d+[A-Za-z]?)?\s+[A-Za-z][A-Za-z \-]{2,40}(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Square|Sq\.?|Way|Crescent|Cres\.?|Close|Terrace|Ter\.?|Parkway|Pkwy\.?)(?:\s*,\s*(?:P\.O\.?\s*Box\s*\d+|[A-Za-z][A-Za-z \-]*[A-Za-z]))*',
-    # "str. Dourleion 16904/53" / "ul. Name 123" with optional next line for zip code and city
-    r'(?i:\b(?:str|ul)\.\s+[A-Za-z][A-Za-z \-]+\d[\d/A-Za-z]*(?:\s*[\n\r]+\s*\d{4,5}\s+[A-Za-z \-]+)?)',
-    # UK postcode
-    r'\b[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}\b',
-    # Multiline Address fallback (e.g. "82 Akropoleos, 2nd floor\n1012 Acropolis, Cyprus")
-    r'\b\d+\s+[A-Za-z][A-Za-z \-]+(?:,\s*\d+(?:st|nd|rd|th)?\s+floor)?\s*[\n\r]+\s*\d{4,5}\s+[A-Za-z][A-Za-z \-]+(?:,\s*[A-Za-z]+)?',
-]
-
-# ===============================
-# REGEX PATTERNS FOR REGISTRATION IDS
-# ===============================
-REG_ID_PATTERNS = [
-    # Cyprus: H.E.107777, HE317807
-    r'H\.?E\.?\s*\d{4,10}',
-    # Germany: HRB 12345
-    r'HRB\s*\d{4,10}',
-    # UK: Company No. 12345678
-    r'(?i:Company\s+No\.?\s*\d{4,10})',
-    # Generic: Reg. No. 12345, Registration No. 12345
-    r'(?i:Reg(?:istration)?\.?\s*No\.?\s*\d{4,10})',
-]
-
-
-# ===============================
-# REGEX PATTERNS FOR BANK ACCOUNTS
-# ===============================
-BANK_ACCOUNT_PATTERNS = [
-    # IBAN: 2 letter country code + 2 check digits + up to 30 alphanumeric
-    r'\b[A-Z]{2}\d{2}\s?[A-Z0-9]{4}\s?[A-Z0-9]{4}\s?[A-Z0-9]{4}(?:\s?[A-Z0-9]{4}){0,5}(?:\s?[A-Z0-9]{1,4})?\b',
-    # SWIFT/BIC codes: 8 or 11 alphanumeric characters (e.g. BARCGB22XXX)
-    r'(?i:(?:SWIFT|BIC)\s*(?:code)?\s*[:.]?\s*)([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)',
-    # Standalone SWIFT/BIC pattern (8 or 11 chars, typical format)
-    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b',
-    # Account numbers near keywords: "Account No. 1234567890" / "A/C 1234567890"
-    r'(?i:(?:account|acct|a/c)\s*(?:no\.?|number|#)?\s*[:.]?\s*)(\d[\d\s\-]{5,25}\d)',
-    # Sort code: 12-34-56
-    r'(?i:sort\s*code\s*[:.]?\s*)(\d{2}-\d{2}-\d{2})',
-]
-
-
-# ===============================
-# REGEX PATTERNS FOR PHONES
-# ===============================
-PHONE_PATTERNS = [
-    r'(?i:\b(?:tel|fax|phone|mobile|mob)\.?\s*(?:\+[\d\s\-\.()]{7,20}|[\d\s\-\.()]{7,20})\b)',
-    r'\b\+?\d{1,3}[-.\s]?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b'
-]
-
-
-# ===============================
-# ENTITY VALIDATION
-# ===============================
-_FRAGMENT_INDICATORS = [
-    'the company', 'of the', 'in the', 'by the', 'to the', 'for the',
-    'at the', 'on the', 'from the', 'with the', 'and the', 'or the',
-    'shall', 'may', 'must', 'will', 'would', 'should', 'could',
-    'provided that', 'subject to', 'pursuant to', 'in accordance',
-    'herein', 'hereof', 'hereto', 'hereby', 'hereunder',
-    'including', 'excluding', 'except',
-    '\n',
-]
-
-
-def validate_entity(name):
-    name = name.strip()
-    if len(name) < 3:
-        return False
-    if name.lower() in GENERIC_TERMS_LOWER:
-        return False
-    cleaned = re.sub(r'[\[\]\.\(\)\s_\-]', '', name)
-    if not cleaned or not any(c.isalpha() for c in cleaned):
-        return False
-    name_lower = name.lower()
-    for indicator in _FRAGMENT_INDICATORS:
-        if indicator in name_lower:
-            return False
-    words = name.split()
-    if len(words) == 1:
-        if not (name.isupper() and len(name) >= 2):
-            return False
-    return True
-
-
-def validate_organization(name):
-    """Additional validation for organisations beyond validate_entity.
-    Rejects known non-company entities (government bodies, regulations, etc.)"""
-    name = name.strip()
-    name_lower = name.lower()
-
-    # Check the known non-company blacklist
-    if name_lower in KNOWN_NON_COMPANY_LOWER:
-        return False
-
-    # Reject EU directive / regulation patterns:
-    # "Directive (EU) 2018/843", "Directive 2018/1673", "Regulation (EU) No. 833/2014"
-    if re.match(r'(?i)^(?:directive|regulation|council\s+regulation)', name):
-        return False
-
-    # Reject if it's a role description like "Directors of Company Name"
-    if re.match(r'(?i)^(?:directors?|officers?|members?|trustees?)\s+of\s+', name):
-        return False
-
-    # Reject "Provision of ..." type fragments
-    if re.match(r'(?i)^(?:provision|provisions?)\s+of\s+', name):
-        return False
-
-    # Reject fragments starting with a number followed by a period/dot and text
-    # like "5. Provision of general or limited"
-    if re.match(r'^\d+\.\s+', name):
-        return False
-
-    # Reject "PEP as UBO" type fragments
-    if 'pep' in name_lower and 'ubo' in name_lower:
-        return False
-
-    # Reject "Company incorporated" / "Company formed" fragments
-    if re.match(r'(?i)^company\s+(?:incorporated|formed|registered)', name):
-        return False
-
-    return True
-
-
-def validate_date(date_str):
-    date_str = date_str.strip()
-    if len(date_str) < 4:
-        return False
-    duration_words = {'days', 'day', 'weeks', 'week', 'months', 'month', 'years', 'year'}
-    words = date_str.lower().split()
-    if any(w in duration_words for w in words):
-        return False
-    if re.fullmatch(r'\d{4}', date_str):
-        return False
-    if not any(c.isdigit() for c in date_str):
-        return False
-
-    # Reject quarter references: "Q1 2024", "Q2 2024", etc.
-    if re.fullmatch(r'(?i)Q[1-4]\s+\d{4}', date_str):
-        return False
-
-    # Reject directive/regulation references: "2015/849", "2021/02"
-    # These are EU directive numbers, not dates
-    if re.fullmatch(r'\d{4}/\d{1,4}', date_str):
-        return False
-
-    # Reject section/article numbers like "2.2.11", "1.3.5", "10.2.1"
-    # These are dot-separated numbering that the date regex can match
-    section_match = re.fullmatch(r'(\d{1,2})\.(\d{1,2})\.(\d{1,4})', date_str)
-    if section_match:
-        a, b, c = int(section_match.group(1)), int(section_match.group(2)), int(section_match.group(3))
-        # Real dates: DD.MM.YYYY (day 1-31, month 1-12, year >=1900)
-        # or DD.MM.YY  (day 1-31, month 1-12, year 0-99)
-        is_plausible_date = (
-            1 <= a <= 31 and 1 <= b <= 12 and (
-                c >= 1900 or  # DD.MM.YYYY
-                (c <= 99 and a <= 31 and b <= 12)  # DD.MM.YY
-            )
-        )
-        # Also check MM.DD.YYYY (US format)
-        is_plausible_us = (
-            1 <= a <= 12 and 1 <= b <= 31 and c >= 1900
-        )
-        if not (is_plausible_date or is_plausible_us):
-            return False
-
-    return True
-
-
-def validate_address(addr_str):
-    addr_str = addr_str.strip()
-    if len(addr_str) < 5:
-        return False
-    if not any(c.isalpha() for c in addr_str):
-        return False
-
-    addr_lower = addr_str.lower()
-
-    # Reject anything containing newlines — these are page number + section header fragments
-    # e.g. "4\n\nINTRODUCTION", "10\n\nInspections"
-    if '\n' in addr_str or '\r' in addr_str:
-        return False
-
-    # Reject obvious sentence fragments (legal/contract language)
-    reject_phrases = [
-        'shall', 'will be', 'would', 'should', 'could', 'must',
-        'hours after', 'days after', 'time it has been',
-        'provided that', 'subject to', 'pursuant to', 'in accordance',
-        'in accord', 'notwithstanding', 'herein', 'hereof', 'hereto', 'hereby',
-        'the tenant', 'the landlord', 'the company', 'the parties',
-        'terminate', 'terminated', 'agreement', 'obligation',
-        'or any law', 'unless',
-        'be read', 'regulation', 'article', 'section', 'clause',
-        'cap.', 'amending', 'substitut', 'earlier',
-        'whichever', 'forthwith', 'reasonable', 'written notice',
-        'liability', 'indemnity', 'warranty', 'covenant',
-        'whereas', 'witnesseth', 'stipulat',
-        'extraordinary', 'ordinary', 'resolution', 'meeting',
-        'general meeting', 'shareholder', 'dividend', 'quorum',
-        'registered office', 'memorandum', 'constitution',
-        'paragraph', 'sub-clause', 'schedule', 'appendix', 'annex',
-        'approval', 'consent', 'notice of', 'right to',
-        # Additional reject phrases for common false positives
-        'risk cust', 'risk custom', 'risks',
-        'clients onboard', 'client onboard',
-        'chapter', 'directive', 'inspect',
-        'categoriz', 'categori', 'implementat', 'implement',
-        'ongoing monitoring', 'on-going monitoring',
-        'record', 'keeping', 'document',
-        'communicat', 'employ', 'protect',
-        'structure', 'staffi', 'staff',
-        'introduc', 'suggest', 'key issues',
-        'compl', 'compli',
-        'data protect', 'money laundering',
-        'reliab', 'reliance',
-        'framework', 'inter',
-        'provision', 'partner',
-        'fatf', 'jurisdict',
-    ]
-    for phrase in reject_phrases:
-        if phrase in addr_lower:
-            return False
-
-    # Reject if it starts with a bare year (e.g. "2025 unless terminated...")
-    if re.match(r'^\d{4}\s', addr_str):
-        return False
-
-    # Reject if it looks like a date fragment
-    if re.match(r'^\d{1,2}/\d{2,4}\b', addr_str):
-        return False
-
-    # Reject if it starts with a small number followed by a space and non-address text
-    # e.g. "1 year for high risk cust", "2 clients onboarded", "3 years for low risk"
-    # But allow "123 Main Street" (3+ digit house numbers, or number followed by address words)
-    _address_indicator_words = {
-        'street', 'st', 'avenue', 'ave', 'road', 'rd', 'boulevard', 'blvd',
-        'lane', 'ln', 'drive', 'dr', 'court', 'ct', 'place', 'pl',
-        'square', 'sq', 'way', 'crescent', 'cres', 'close', 'terrace', 'ter',
-        'parkway', 'pkwy', 'floor', 'flat', 'apartment', 'apt', 'suite', 'ste',
-        'building', 'bldg', 'block', 'unit', 'office',
-        'p.o.', 'po', 'box', 'p.o', 'postcode', 'zip',
-    }
-    start_match = re.match(r'^(\d{1,2})\s+(\w+)', addr_str)
-    if start_match:
-        num = int(start_match.group(1))
-        next_word = start_match.group(2).lower().rstrip('.')
-        # Small numbers (1-99) followed by non-address words = not an address
-        if num < 100 and next_word not in _address_indicator_words:
-            return False
-
-    # Reject text that looks like "8 and Chapter VI" — reference fragments
-    if re.match(r'^\d+\s+and\s+', addr_str, re.IGNORECASE):
-        return False
-
-    # Must contain at least one address-like indicator to be considered an address
-    _addr_evidence = [
-        'street', 'st.', 'avenue', 'ave.', 'road', 'rd.', 'boulevard', 'blvd.',
-        'lane', 'ln.', 'drive', 'dr.', 'court', 'ct.', 'place', 'pl.',
-        'floor', 'flat', 'apartment', 'apt', 'suite', 'ste',
-        'p.o. box', 'p.o.box', 'po box', 'postcode',
-        'building', 'bldg', 'block', 'unit',
-        'str.', 'ul.',
-    ]
-    # Also check for postal code patterns (4-6 digit sequences typical of postcodes)
-    has_postcode = bool(re.search(r'\b\d{4,6}\b', addr_str))
-    has_addr_word = any(w in addr_lower for w in _addr_evidence)
-
-    # If it has neither a postcode nor an address-specific word, reject it
-    # UNLESS it was caught by a very specific address regex pattern
-    if not has_postcode and not has_addr_word:
-        return False
-
-    return True
-
-
-def validate_phone(phone_str, full_text=None):
-    phone_str = phone_str.strip()
-    digits = re.sub(r'\D', '', phone_str)
-    if len(digits) < 6:
-        return False
-    # If we have the full text, check context around this number
-    # Reject if it appears near account/bank keywords
-    if full_text:
-        # Find the number in the full text and check surrounding words
-        pos = full_text.find(phone_str)
-        if pos == -1:
-            pos = full_text.lower().find(phone_str.lower())
-        if pos != -1:
-            # Look at 60 chars before and after for context
-            start = max(0, pos - 60)
-            end = min(len(full_text), pos + len(phone_str) + 60)
-            context = full_text[start:end].lower()
-            account_keywords = [
-                'account', 'acct', 'a/c', 'iban', 'swift', 'bic',
-                'bank', 'deposit', 'routing', 'sort code',
-            ]
-            if any(kw in context for kw in account_keywords):
-                return False
-    return True
-
-
-# ===============================
-# ENTITY GROUPING
-# ===============================
-_LEGAL_SUFFIX_NORMALIZE = [
-    (r'\bLtd\.?\b', 'LIMITED'),
-    (r'\bInc\.?\b', 'INCORPORATED'),
-    (r'\bCorp\.?\b', 'CORPORATION'),
-    (r'\bL\.?L\.?C\.?\b', 'LLC'),
-    (r'\bL\.?L\.?P\.?\b', 'LLP'),
-    (r'\bP\.?L\.?C\.?\b', 'PLC'),
-    (r'\bPty\.?\b', 'PTY'),
-    (r'\bGmbH\b', 'GMBH'),
-]
-
-
-def normalize_org_name(name):
-    """Normalize company name by expanding legal suffix abbreviations.
-    E.g. 'DEMETRA INVESTMENTS PUBLIC LTD' -> 'DEMETRA INVESTMENTS PUBLIC LIMITED'"""
-    n = name.strip().rstrip('.')
-    for pattern, replacement in _LEGAL_SUFFIX_NORMALIZE:
-        n = re.sub(pattern, replacement, n, flags=re.IGNORECASE)
-    return n.upper()
-
-
-def group_org_variants(organizations):
-    """Group orgs with same suffix-normalized form. Keep longest as canonical."""
-    groups = []
-    group_norms = []
-
-    for org in organizations:
-        matched_idx = None
-        org_norm = normalize_org_name(org)
-        for i, norm in enumerate(group_norms):
-            if org_norm == norm:
-                matched_idx = i
-                break
-
-        if matched_idx is not None:
-            groups[matched_idx][1].append(org)
-            if len(org) > len(groups[matched_idx][0]):
-                groups[matched_idx] = (org, groups[matched_idx][1])
-                group_norms[matched_idx] = normalize_org_name(org)
-        else:
-            groups.append((org, [org]))
-            group_norms.append(org_norm)
-
-    return groups
-
-
-def group_person_variants(persons):
-    """Simple dedup for persons. Keep longest variant."""
-    groups = []
-    seen_lower = {}
-    for person in persons:
-        key = person.lower().strip()
-        if key in seen_lower:
-            idx = seen_lower[key]
-            groups[idx][1].append(person)
-            if len(person) > len(groups[idx][0]):
-                groups[idx] = (person, groups[idx][1])
-        else:
-            seen_lower[key] = len(groups)
-            groups.append((person, [person]))
-    return groups
-
-
-# ===============================
-# NAME PATTERN MATCHING
-# ===============================
-def build_name_pattern(name):
-    """Build a regex that matches a person name (case-insensitive, exact tokens)."""
-    parts = name.strip().split()
-    if len(parts) < 2:
-        return None
-    regex_parts = []
-    for part in parts:
-        if not part:
-            continue
-        regex_parts.append(re.escape(part))
-    return r'\s+'.join(regex_parts) if regex_parts else None
-
-
-def build_person_patterns(person_groups, mapping):
-    """Build list of (compiled_regex, placeholder) for name matching."""
-    patterns = []
-    for canonical, variants in person_groups:
-        placeholder = mapping.get(canonical)
-        if not placeholder:
-            for v in variants:
-                if v in mapping:
-                    placeholder = mapping[v]
-                    break
-        if not placeholder:
-            continue
-
-        seen_patterns = set()
-        for variant in variants:
-            pat = build_name_pattern(variant)
-            if pat and pat not in seen_patterns:
-                seen_patterns.add(pat)
-                full_pat = r'(?<![A-Za-z])' + pat + r'(?![A-Za-z])'
-                try:
-                    patterns.append((re.compile(full_pat, re.IGNORECASE), placeholder))
-                except re.error:
-                    pass
-    return patterns
+print(f"[LOG] Qwen/Qwen3-14B loaded via vLLM", flush=True)
 
 
 # ===============================
@@ -580,22 +39,54 @@ def combine_pages(pages):
     return "\n\n".join(p["text"] for p in sorted_pages)
 
 
-def chunk_text_with_overlap(text, max_tokens=4500, overlap_tokens=200):
+def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=200):
+    """Split text into token-limited chunks with sentence-boundary awareness.
+
+    max_tokens is kept conservative (3000) so that after adding the system
+    prompt (~1500 tokens) and reserving max_tokens for output (4096), the
+    total stays safely within max_model_len (16384).
+
+    Tries to break at sentence boundaries (. ! ?) to give the LLM better
+    context per chunk, improving entity detection accuracy.
+    """
     tokens = tokenizer.encode(text, add_special_tokens=False)
     chunks = []
     start = 0
     while start < len(tokens):
         end = min(start + max_tokens, len(tokens))
         chunk_text = tokenizer.decode(tokens[start:end], skip_special_tokens=True)
-        chunks.append(chunk_text)
-        if end >= len(tokens):
+        actual_end = end
+
+        # Try to break at sentence boundary if not at the end of the text
+        if end < len(tokens) and len(chunk_text) > 200:
+            sentence_enders = ['. ', '! ', '? ', '.\n', '!\n', '?\n']
+            best_break = -1
+            for ender in sentence_enders:
+                idx = chunk_text.rfind(ender)
+                if idx > best_break:
+                    best_break = idx
+
+            # Only break at sentence if boundary is in the last 40% of chunk
+            # (don't make chunks too small)
+            min_break_pos = len(chunk_text) * 6 // 10
+            if best_break >= min_break_pos:
+                trimmed_text = chunk_text[:best_break + 1].strip()
+                if trimmed_text:
+                    trimmed_tokens = tokenizer.encode(trimmed_text, add_special_tokens=False)
+                    chunk_text = trimmed_text
+                    actual_end = start + len(trimmed_tokens)
+
+        chunk_text = chunk_text.strip()
+        if chunk_text:
+            chunks.append(chunk_text)
+        if actual_end >= len(tokens):
             break
-        start += max_tokens - overlap_tokens
+        start = max(actual_end - overlap_tokens, start + 1)
 
     return chunks
 
 
-MAX_CHUNKS = 80
+MAX_CHUNKS = 120   # 40 pages ≈ 40-50 chunks at 3000 tok/chunk — give headroom
 
 
 SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assistant for legal and business documents.
@@ -608,6 +99,7 @@ Extract ALL of the following from the text:
 5. Phone numbers (phone and fax numbers)
 6. Registration IDs (company registration numbers, tax IDs)
 7. Bank accounts (IBAN numbers, bank account numbers, SWIFT/BIC codes)
+8. Email addresses (email addresses of individuals or organizations)
 
 CRITICAL RULES - what to extract:
 - PERSONS: Only real human names, like "John Smith", "Andreas Menelaou"
@@ -631,6 +123,9 @@ CRITICAL RULES - what to extract:
 - BANK ACCOUNTS: Bank account numbers, IBAN codes, SWIFT/BIC codes
   - Examples: "CY17 0020 0128 0000 0012 0052 7600", "BCYPCY2N", "Account No. 0120052760"
   - Include ANY numbers explicitly labeled as bank accounts, deposit accounts, or payment accounts
+- EMAILS: Email addresses of individuals or organizations
+  - Examples: "john@example.com", "info@company.com", "maria.smith@org.co.uk"
+  - Extract email addresses found anywhere in the document
 
 CRITICAL RULES - what NOT to extract:
 - Do NOT extract role titles as persons: Chairman, Director, Secretary, Landlord, Tenant
@@ -652,6 +147,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract counts or quantities as addresses (e.g. "2 clients onboarded" is NOT an address)
 - Do NOT extract legal references as addresses (e.g. "8 and Chapter VI of Directive" is NOT an address)
 - Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
+- Do NOT extract URLs or website domain names as email addresses (e.g. "www.example.com" is NOT an email)
 
 Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
 
@@ -662,7 +158,8 @@ Output ONLY valid JSON with no explanation or thinking. Do not wrap in markdown.
   "addresses": ["addr1", "addr2"],
   "phones": ["phone1", "phone2"],
   "registration_ids": ["H.E.107777"],
-  "bank_accounts": ["CY17 0020 0128 0000 0012 0052 7600"]
+  "bank_accounts": ["CY17 0020 0128 0000 0012 0052 7600"],
+  "emails": ["email1@example.com"]
 }"""
 
 
@@ -673,125 +170,183 @@ def strip_thinking(text):
     return text.strip()
 
 
-def extract_entities_llm(text_chunk):
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, phones, registration IDs, and bank accounts:\n\n{text_chunk}"}
-    ]
+def extract_entities_batch(chunks):
+    """Extract entities from all chunks using vLLM batch inference.
 
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=8192).to(model.device)
-    prompt_len = inputs["input_ids"].shape[1]
+    Processes chunks in micro-batches of BATCH_SIZE to avoid GPU KV-cache
+    OOM when there are many chunks from large documents.
+    """
+    BATCH_SIZE = 8  # Process 8 chunks at a time to avoid KV-cache OOM
 
-    with torch.no_grad():
-        output = model.generate(
-            **inputs, max_new_tokens=2048,
-            do_sample=False, temperature=1.0, repetition_penalty=1.1
-        )
+    all_persons, all_orgs, all_dates = [], [], []
+    all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails = [], [], [], [], []
 
-    del inputs
-    torch.cuda.empty_cache()
+    total_chunks = len(chunks)
+    for batch_start in range(0, total_chunks, BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, total_chunks)
+        batch_chunks = chunks[batch_start:batch_end]
 
-    raw_output = tokenizer.decode(output[0][prompt_len:], skip_special_tokens=True).strip()
-    del output
+        print(f"[LOG] Processing chunks {batch_start + 1}-{batch_end} of {total_chunks}", flush=True)
 
+        prompts = []
+        for chunk in batch_chunks:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, phones, registration IDs, bank accounts, and emails:\n\n{chunk}"}
+            ]
+            prompt = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+            )
+            prompts.append(prompt)
 
-    # Strip any <think> blocks (safety net for thinking models)
-    cleaned_output = strip_thinking(raw_output)
+        outputs = llm.generate(prompts, SAMPLING_PARAMS)
 
+        for output in outputs:
+            raw = output.outputs[0].text.strip()
+            cleaned = strip_thinking(raw)
 
-    try:
-        json_match = re.search(r'\{[^{}]*"persons"\s*:.*\}', cleaned_output, re.DOTALL)
-        if not json_match:
-            json_match = re.search(r'\{.*\}', cleaned_output, re.DOTALL)
-        result = json.loads(json_match.group()) if json_match else json.loads(cleaned_output)
-        persons = [p.strip() for p in result.get("persons", []) if p and p.strip()]
-        organizations = [o.strip() for o in result.get("organizations", []) if o and o.strip()]
-        dates = [d.strip() for d in result.get("dates", []) if d and d.strip()]
-        addresses = [a.strip() for a in result.get("addresses", []) if a and a.strip()]
-        phones = [p.strip() for p in result.get("phones", []) if p and p.strip()]
-        reg_ids = [r.strip() for r in result.get("registration_ids", []) if r and r.strip()]
-        bank_accounts = [b.strip() for b in result.get("bank_accounts", []) if b and b.strip()]
+            try:
+                json_match = re.search(r'\{[^{}]*"persons"\s*:.*\}', cleaned, re.DOTALL)
+                if not json_match:
+                    json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+                result = json.loads(json_match.group()) if json_match else json.loads(cleaned)
 
-        return persons, organizations, dates, addresses, phones, reg_ids, bank_accounts
-    except (json.JSONDecodeError, AttributeError) as e:
+                all_persons.extend([p.strip() for p in result.get("persons", []) if p and p.strip()])
+                all_orgs.extend([o.strip() for o in result.get("organizations", []) if o and o.strip()])
+                all_dates.extend([d.strip() for d in result.get("dates", []) if d and d.strip()])
+                all_addresses.extend([a.strip() for a in result.get("addresses", []) if a and a.strip()])
+                all_phones.extend([p.strip() for p in result.get("phones", []) if p and p.strip()])
+                all_reg_ids.extend([r.strip() for r in result.get("registration_ids", []) if r and r.strip()])
+                all_bank_accounts.extend([b.strip() for b in result.get("bank_accounts", []) if b and b.strip()])
+                all_emails.extend([e.strip() for e in result.get("emails", []) if e and e.strip()])
+            except (json.JSONDecodeError, AttributeError) as e:
+                print(f"[WARN] Failed to parse chunk output: {e}", flush=True)
+                print(f"[WARN] Raw output was: {raw[:500]}", flush=True)
 
-        return [], [], [], [], [], [], []
+    print(f"[LOG] Entity extraction complete. Found: {len(all_persons)} persons, "
+          f"{len(all_orgs)} orgs, {len(all_dates)} dates, {len(all_addresses)} addresses, "
+          f"{len(all_phones)} phones, {len(all_reg_ids)} reg_ids, {len(all_bank_accounts)} bank_accounts, "
+          f"{len(all_emails)} emails",
+          flush=True)
+
+    return all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails
 
 
 # ===============================
-# REGEX DETECTION FUNCTIONS
+# ANTI-HALLUCINATION VALIDATION
 # ===============================
-def detect_companies_regex(text):
-    organizations = []
-    for pattern in COMPANY_FULL_PATTERNS:
-        for match in re.finditer(pattern, text):
-            clean = match.group().strip()
-            if clean and clean not in organizations:
-                organizations.append(clean)
+def verify_entity_in_text(entity, full_text_lower):
+    """Check if an entity actually exists in the source document.
 
-    return organizations
-
-
-def detect_dates_regex(text):
-    dates = []
-    seen = set()
-    for pattern in DATE_PATTERNS:
-        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
-            token = m.group().strip()
-            if token and token.lower() not in seen:
-                seen.add(token.lower())
-                dates.append(token)
-    return dates
-
-
-def detect_addresses_regex(text):
-    addresses = []
-    seen = set()
-    for pattern in ADDRESS_PATTERNS:
-        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
-            token = m.group().strip()
-            if token and token.lower() not in seen:
-                seen.add(token.lower())
-                addresses.append(token)
-    return addresses
-
-
-def detect_phones_regex(text):
-    phones = []
-    seen = set()
-    for pattern in PHONE_PATTERNS:
-        for m in re.finditer(pattern, text):
-            token = m.group().strip()
-            if token and token.lower() not in seen and len(re.sub(r'\D', '', token)) >= 6:
-                seen.add(token.lower())
-                phones.append(token)
-    return phones
-
-
-def detect_bank_accounts_regex(text):
-    """Detect bank account numbers, IBANs, SWIFT/BIC codes via regex."""
-    accounts = []
-    seen = set()
-    for pattern in BANK_ACCOUNT_PATTERNS:
-        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
-            # Some patterns have capture groups for the actual value
-            token = (m.group(1) if m.lastindex and m.group(1) else m.group()).strip()
-            if token and token.lower() not in seen and len(token) >= 6:
-                seen.add(token.lower())
-                accounts.append(token)
-    return accounts
-
-
-def validate_bank_account(acct_str):
-    """Validate a bank account string."""
-    acct_str = acct_str.strip()
-    if len(acct_str) < 6:
+    Uses case-insensitive matching with flexible whitespace.
+    Returns True if the entity (or a whitespace-flexible variant) is found.
+    """
+    entity_clean = entity.strip()
+    if not entity_clean:
         return False
-    # Must contain at least some digits
-    if not any(c.isdigit() for c in acct_str):
-        return False
-    return True
+
+    # Fast path: direct case-insensitive substring match
+    if entity_clean.lower() in full_text_lower:
+        return True
+
+    # Flexible whitespace: the entity might span a line break in the source
+    # e.g., model says "John Smith" but text has "John\nSmith"
+    words = entity_clean.split()
+    if len(words) > 1:
+        flexible = r'\s+'.join(re.escape(w) for w in words)
+        if re.search(flexible, full_text_lower, re.IGNORECASE):
+            return True
+
+    return False
+
+
+def validate_entities(entities, full_text_lower, entity_type):
+    """Filter out hallucinated entities that don't appear in the source text."""
+    valid = []
+    removed = []
+    for entity in entities:
+        if verify_entity_in_text(entity, full_text_lower):
+            valid.append(entity)
+        else:
+            removed.append(entity)
+
+    if removed:
+        print(f"[HALLUCINATION] Removed {len(removed)} fake {entity_type}: {removed[:10]}", flush=True)
+
+    return valid
+
+
+# ===============================
+# REGEX BACKUP DETECTION
+# ===============================
+def regex_backup_detection(full_text):
+    """Catch common PII patterns the LLM might have missed using regex.
+
+    Runs as a safety net after LLM extraction to ensure high-confidence
+    patterns like emails, phone numbers, and IBANs are never missed.
+    """
+    backup_emails = []
+    backup_phones = []
+    backup_ibans = []
+
+    # Email pattern
+    email_pattern = r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
+    for match in re.finditer(email_pattern, full_text):
+        backup_emails.append(match.group())
+
+    # International phone pattern (requires 7-15 digits)
+    phone_pattern = r'(?<!\d)(?:\+\d{1,3}[\s\-]?)?\(?\d{1,4}\)?[\s\-]?\d{2,4}[\s\-]?\d{3,4}(?!\d)'
+    for match in re.finditer(phone_pattern, full_text):
+        candidate = match.group().strip()
+        digits = re.sub(r'\D', '', candidate)
+        if 7 <= len(digits) <= 15:
+            backup_phones.append(candidate)
+
+    # IBAN pattern
+    iban_pattern = r'\b[A-Z]{2}\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{0,4}\b'
+    for match in re.finditer(iban_pattern, full_text):
+        backup_ibans.append(match.group())
+
+    return backup_emails, backup_phones, backup_ibans
+
+
+# ===============================
+# DEDUPLICATION
+# ===============================
+def dedup_list(items):
+    """Deduplicate a list while preserving order (case-insensitive)."""
+    seen = set()
+    result = []
+    for item in items:
+        item = item.strip()
+        if item and item.lower() not in seen:
+            seen.add(item.lower())
+            result.append(item)
+    return result
+
+
+def dedup_substrings(items):
+    """Remove items that are substrings of other items.
+
+    Optimized: uses a set for O(1) exact-match skips and limits
+    comparison window for large lists.
+    """
+    if not items:
+        return items
+    sorted_items = sorted(items, key=len, reverse=True)
+    result = []
+    result_lower = []  # parallel list to avoid repeated .lower() calls
+    for item in sorted_items:
+        item_lower = item.lower()
+        is_sub = False
+        for accepted_lower in result_lower:
+            if item_lower in accepted_lower:
+                is_sub = True
+                break
+        if not is_sub:
+            result.append(item)
+            result_lower.append(item_lower)
+    return result
 
 
 # ===============================
@@ -802,117 +357,81 @@ def _flexible_pattern(text_str):
     but NEVER matches in the middle of a word."""
     escaped = re.escape(text_str)
     flexible = escaped.replace(r'\ ', r'\s+')
-    # Word boundary guards: prevent matching inside words
-    # Left:  must not be preceded by a word character (letter/digit/underscore)
-    # Right: must not be followed by a word character
     return r'(?<!\w)' + flexible + r'(?!\w)'
 
 
-def replace_dates(text, date_map):
-    for date_str in sorted(date_map.keys(), key=len, reverse=True):
-        pattern = _flexible_pattern(date_str)
-        text = re.sub(pattern, date_map[date_str], text, flags=re.IGNORECASE)
-    return text
+def build_combined_pattern(mapping):
+    """Build a single compiled regex that matches all entities at once.
 
-
-def replace_addresses(text, addr_map):
-    for addr_str in sorted(addr_map.keys(), key=len, reverse=True):
-        pattern = _flexible_pattern(addr_str)
-        text = re.sub(pattern, addr_map[addr_str], text, flags=re.IGNORECASE)
-    return text
-
-
-def replace_phones(text, phone_map):
-    for phone_str in sorted(phone_map.keys(), key=len, reverse=True):
-        pattern = _flexible_pattern(phone_str)
-        text = re.sub(pattern, phone_map[phone_str], text, flags=re.IGNORECASE)
-    return text
-
-
-def safe_replace(text, mapping, name_patterns=None):
+    This is dramatically faster than running one regex per entity,
+    especially when there are hundreds of entities across many pages.
+    Entities are sorted longest-first so longer matches take priority.
+    """
     sorted_entities = sorted(mapping.keys(), key=len, reverse=True)
+    patterns = []
     for entity in sorted_entities:
-        placeholder = mapping[entity]
-        escaped = re.escape(entity)
-        pattern = r'(?<![A-Za-z])' + escaped + r'(?![A-Za-z])'
-        text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
-    if name_patterns:
-        for compiled_re, placeholder in name_patterns:
-            text = compiled_re.sub(placeholder, text)
+        patterns.append(_flexible_pattern(entity))
+    combined = '|'.join(f'({p})' for p in patterns)
+    return re.compile(combined, re.IGNORECASE), sorted_entities
+
+
+def safe_replace(text, mapping):
+    """Replace all entities in text using a single-pass combined regex.
+
+    For small mapping sets (< 5), falls back to sequential replacement
+    since the overhead of building a combined pattern isn't worth it.
+    """
+    if not mapping:
+        return text
+
+    if len(mapping) < 5:
+        # Small number of entities — sequential is fine
+        sorted_entities = sorted(mapping.keys(), key=len, reverse=True)
+        for entity in sorted_entities:
+            placeholder = mapping[entity]
+            pattern = _flexible_pattern(entity)
+            text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
+        return text
+
+    # For many entities, use single-pass replacement
+    sorted_entities = sorted(mapping.keys(), key=len, reverse=True)
+    patterns = [_flexible_pattern(entity) for entity in sorted_entities]
+    combined = '|'.join(f'({p})' for p in patterns)
+
+    try:
+        compiled = re.compile(combined, re.IGNORECASE)
+    except re.error:
+        # Fallback to sequential if regex is too complex
+        for entity in sorted_entities:
+            placeholder = mapping[entity]
+            pattern = _flexible_pattern(entity)
+            text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
+        return text
+
+    # Build a lookup: for each match, find which entity it matched
+    entity_lower_map = {}
+    for entity in sorted_entities:
+        entity_lower_map[entity.lower()] = mapping[entity]
+
+    def replace_match(match):
+        matched_text = match.group(0)
+        # Look up the matched text (case-insensitive)
+        matched_lower = matched_text.lower().strip()
+        # Try exact match first
+        if matched_lower in entity_lower_map:
+            return entity_lower_map[matched_lower]
+        # Normalize whitespace and try again
+        normalized = re.sub(r'\s+', ' ', matched_lower)
+        if normalized in entity_lower_map:
+            return entity_lower_map[normalized]
+        # Fallback: find the entity that best matches
+        for entity, placeholder in mapping.items():
+            if re.fullmatch(_flexible_pattern(entity), matched_text, re.IGNORECASE):
+                return placeholder
+        return matched_text  # no match — return unchanged
+
+    text = compiled.sub(replace_match, text)
     return text
-
-
-def dedup_substrings(items):
-    if not items:
-        return items
-    sorted_items = sorted(items, key=len, reverse=True)
-    result = []
-    for item in sorted_items:
-        item_lower = item.lower()
-        is_sub = False
-        for accepted in result:
-            if item_lower in accepted.lower():
-                is_sub = True
-                break
-        if not is_sub:
-            result.append(item)
-    return result
-
-
-def merge_entities(llm_persons, llm_orgs, regex_orgs):
-    """Merge, validate, deduplicate."""
-    seen_p = set()
-    persons = []
-    for p in llm_persons:
-        n = p.strip()
-        if n and n.lower() not in seen_p and validate_entity(n):
-            seen_p.add(n.lower())
-            persons.append(n)
-
-    seen_o = set()
-    organizations = []
-    for o in llm_orgs + regex_orgs:
-        n = o.strip()
-        norm = n.rstrip('. ').lower()
-        if n and norm not in seen_o and validate_entity(n) and validate_organization(n):
-            seen_o.add(norm)
-            organizations.append(n)
-
-
-    return persons, organizations
-
-
-def build_ordered_mapping(full_text, person_groups, org_groups):
-    def find_earliest(variants):
-        best = float('inf')
-        for v in variants:
-            pos = full_text.find(v)
-            if pos == -1:
-                pos = full_text.lower().find(v.lower())
-            if pos != -1 and pos < best:
-                best = pos
-        return best
-
-    org_positions = [(c, vs, find_earliest(vs)) for c, vs in org_groups]
-    person_positions = [(c, vs, find_earliest(vs)) for c, vs in person_groups]
-
-    org_positions.sort(key=lambda x: x[2])
-    person_positions.sort(key=lambda x: x[2])
-
-    mapping = {}
-    for idx, (canonical, variants, _) in enumerate(org_positions, 1):
-        placeholder = f"[COMPANY{idx}]"
-        for v in variants:
-            mapping[v] = placeholder
-
-    for idx, (canonical, variants, _) in enumerate(person_positions, 1):
-        placeholder = f"[PERSON{idx}]"
-        for v in variants:
-            mapping[v] = placeholder
-
-
-
-    return mapping
 
 
 # ===============================
@@ -921,9 +440,11 @@ def build_ordered_mapping(full_text, person_groups, org_groups):
 def anonymize_document(pages):
 
     full_text = combine_pages(pages)
-
+    total_tokens = len(tokenizer.encode(full_text, add_special_tokens=False))
+    print(f"[LOG] Document: {len(pages)} pages, ~{total_tokens} tokens", flush=True)
 
     chunks = chunk_text_with_overlap(full_text)
+    print(f"[LOG] Split into {len(chunks)} chunks", flush=True)
 
     if len(chunks) > MAX_CHUNKS:
         return {
@@ -933,78 +454,79 @@ def anonymize_document(pages):
             )
         }
 
-    all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts = [], [], [], [], [], [], []
-    for i, chunk in enumerate(chunks):
-        persons, orgs, dates, addresses, phones, reg_ids, bank_accounts = extract_entities_llm(chunk)
-        all_persons.extend(persons)
-        all_orgs.extend(orgs)
-        all_dates.extend(dates)
-        all_addresses.extend(addresses)
-        all_phones.extend(phones)
-        all_reg_ids.extend(reg_ids)
-        all_bank_accounts.extend(bank_accounts)
+    # Batch inference: process chunks in micro-batches via vLLM
+    all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails = \
+        extract_entities_batch(chunks)
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            gc.collect()
+    # ---- ANTI-HALLUCINATION: verify every entity exists in the source text ----
+    full_text_lower = full_text.lower()
+    all_persons = validate_entities(all_persons, full_text_lower, "persons")
+    all_orgs = validate_entities(all_orgs, full_text_lower, "organizations")
+    all_dates = validate_entities(all_dates, full_text_lower, "dates")
+    all_addresses = validate_entities(all_addresses, full_text_lower, "addresses")
+    all_phones = validate_entities(all_phones, full_text_lower, "phones")
+    all_reg_ids = validate_entities(all_reg_ids, full_text_lower, "registration_ids")
+    all_bank_accounts = validate_entities(all_bank_accounts, full_text_lower, "bank_accounts")
+    all_emails = validate_entities(all_emails, full_text_lower, "emails")
 
+    print(f"[LOG] After validation: {len(all_persons)} persons, {len(all_orgs)} orgs, "
+          f"{len(all_dates)} dates, {len(all_addresses)} addresses, "
+          f"{len(all_phones)} phones, {len(all_reg_ids)} reg_ids, "
+          f"{len(all_bank_accounts)} bank_accounts, {len(all_emails)} emails", flush=True)
 
+    # ---- REGEX BACKUP: catch patterns the LLM might have missed ----
+    backup_emails, backup_phones, backup_ibans = regex_backup_detection(full_text)
 
-    # Regex fallback: catch anything the LLM missed
-    regex_orgs = detect_companies_regex(full_text)
-    regex_dates = detect_dates_regex(full_text)
-    regex_addresses = detect_addresses_regex(full_text)
-    regex_phones = detect_phones_regex(full_text)
-    regex_bank_accounts = detect_bank_accounts_regex(full_text)
+    existing_emails_lower = {e.lower() for e in all_emails}
+    for email in backup_emails:
+        if email.lower() not in existing_emails_lower:
+            all_emails.append(email)
+            existing_emails_lower.add(email.lower())
 
-    persons, organizations = merge_entities(all_persons, all_orgs, regex_orgs)
+    existing_phones_lower = {p.lower() for p in all_phones}
+    for phone in backup_phones:
+        if phone.lower() not in existing_phones_lower:
+            all_phones.append(phone)
+            existing_phones_lower.add(phone.lower())
 
-    # Deduplicate dates (LLM + regex)
-    seen_d = set()
-    unique_dates = []
-    for d in all_dates + regex_dates:
-        d = d.strip()
-        if d and d.lower() not in seen_d and validate_date(d):
-            seen_d.add(d.lower())
-            unique_dates.append(d)
-    unique_dates = dedup_substrings(unique_dates)
+    existing_ibans_lower = {b.lower() for b in all_bank_accounts}
+    for iban in backup_ibans:
+        if iban.lower() not in existing_ibans_lower:
+            all_bank_accounts.append(iban)
+            existing_ibans_lower.add(iban.lower())
 
+    print(f"[LOG] After regex backup: {len(all_emails)} emails, "
+          f"{len(all_phones)} phones, {len(all_bank_accounts)} bank_accounts", flush=True)
 
-    # Deduplicate addresses (LLM + regex)
-    seen_a = set()
-    unique_addresses = []
-    for a in all_addresses + regex_addresses:
-        a = a.strip()
-        if a and a.lower() not in seen_a and validate_address(a):
-            seen_a.add(a.lower())
-            unique_addresses.append(a)
-    unique_addresses = dedup_substrings(unique_addresses)
+    # Deduplicate all entity lists
+    unique_persons = dedup_substrings(dedup_list(all_persons))
+    unique_orgs = dedup_substrings(dedup_list(all_orgs))
+    unique_dates = dedup_substrings(dedup_list(all_dates))
+    unique_addresses = dedup_substrings(dedup_list(all_addresses))
+    unique_phones = dedup_substrings(dedup_list(all_phones))
+    unique_reg_ids = dedup_substrings(dedup_list(all_reg_ids))
+    unique_bank_accounts = dedup_substrings(dedup_list(all_bank_accounts))
+    unique_emails = dedup_substrings(dedup_list(all_emails))
 
+    print(f"[LOG] After dedup: {len(unique_persons)} persons, {len(unique_orgs)} orgs, "
+          f"{len(unique_dates)} dates, {len(unique_addresses)} addresses, "
+          f"{len(unique_phones)} phones, {len(unique_reg_ids)} reg_ids, "
+          f"{len(unique_bank_accounts)} bank_accounts, {len(unique_emails)} emails", flush=True)
 
-    # Deduplicate phones (LLM + regex)
-    seen_ph = set()
-    unique_phones = []
-    for ph in all_phones + regex_phones:
-        ph = ph.strip()
-        if ph and ph.lower() not in seen_ph and validate_phone(ph, full_text):
-            seen_ph.add(ph.lower())
-            unique_phones.append(ph)
-    unique_phones = dedup_substrings(unique_phones)
-
-
-    # Group variants
-    person_groups = group_person_variants(persons)
-    org_groups = group_org_variants(organizations)
-
-
-    mapping = build_ordered_mapping(full_text, person_groups, org_groups)
-
-    # Build date/address/phone mappings ordered by first appearance
+    # Build mapping ordered by first appearance in the document
     def find_first_pos(token):
         pos = full_text.find(token)
         if pos == -1:
             pos = full_text.lower().find(token.lower())
         return pos if pos != -1 else float('inf')
+
+    mapping = {}
+
+    for i, org in enumerate(sorted(unique_orgs, key=find_first_pos), 1):
+        mapping[org] = f"[COMPANY{i}]"
+
+    for i, person in enumerate(sorted(unique_persons, key=find_first_pos), 1):
+        mapping[person] = f"[PERSON{i}]"
 
     date_map = {}
     for i, d in enumerate(sorted(unique_dates, key=find_first_pos), 1):
@@ -1018,81 +540,41 @@ def anonymize_document(pages):
     for i, p in enumerate(sorted(unique_phones, key=find_first_pos), 1):
         phone_map[p] = f"[PHONE{i}]"
 
-    # Detect H.E. registration IDs via regex
-    reg_ids = []
-    seen_reg = set()
-    for pattern in REG_ID_PATTERNS:
-        for m in re.finditer(pattern, full_text, flags=re.IGNORECASE):
-            token = m.group().strip()
-            if token and token.lower() not in seen_reg:
-                seen_reg.add(token.lower())
-                reg_ids.append(token)
-    # Also add any from LLM extraction
-    for chunk_result in all_reg_ids:
-        token = chunk_result.strip()
-        if token and token.lower() not in seen_reg:
-            seen_reg.add(token.lower())
-            reg_ids.append(token)
-
     reg_id_map = {}
-    for i, r in enumerate(sorted(reg_ids, key=find_first_pos), 1):
+    for i, r in enumerate(sorted(unique_reg_ids, key=find_first_pos), 1):
         reg_id_map[r] = f"[REG_ID{i}]"
-
-    # Deduplicate bank accounts (LLM + regex)
-    seen_bank = set()
-    unique_bank_accounts = []
-    for ba in all_bank_accounts + regex_bank_accounts:
-        ba = ba.strip()
-        if ba and ba.lower() not in seen_bank and validate_bank_account(ba):
-            seen_bank.add(ba.lower())
-            unique_bank_accounts.append(ba)
-    unique_bank_accounts = dedup_substrings(unique_bank_accounts)
-
 
     bank_account_map = {}
     for i, ba in enumerate(sorted(unique_bank_accounts, key=find_first_pos), 1):
         bank_account_map[ba] = f"[BANK_ACCOUNT{i}]"
 
+    email_map = {}
+    for i, e in enumerate(sorted(unique_emails, key=find_first_pos), 1):
+        email_map[e] = f"[EMAIL{i}]"
 
+    # Combine all mappings for replacement
+    all_mappings = {}
+    all_mappings.update(mapping)
+    all_mappings.update(addr_map)
+    all_mappings.update(date_map)
+    all_mappings.update(phone_map)
+    all_mappings.update(reg_id_map)
+    all_mappings.update(bank_account_map)
+    all_mappings.update(email_map)
 
-    # Build person name patterns
-    name_patterns = build_person_patterns(person_groups, mapping) if mapping else []
+    print(f"[LOG] Total entities to replace: {len(all_mappings)}", flush=True)
 
     # Replace all entities page by page
     anonymized_pages = []
-    for page in sorted(pages, key=lambda p: p["page"]):
-        anon_text = page["text"]
-        if mapping:
-            anon_text = safe_replace(anon_text, mapping, name_patterns)
-        anon_text = replace_addresses(anon_text, addr_map)
-        anon_text = replace_dates(anon_text, date_map)
-        anon_text = replace_phones(anon_text, phone_map)
-        # Replace H.E. registration IDs
-        for reg_str in sorted(reg_id_map.keys(), key=len, reverse=True):
-            pattern = _flexible_pattern(reg_str)
-            anon_text = re.sub(pattern, reg_id_map[reg_str], anon_text, flags=re.IGNORECASE)
-        # Replace bank account numbers
-        for ba_str in sorted(bank_account_map.keys(), key=len, reverse=True):
-            pattern = _flexible_pattern(ba_str)
-            anon_text = re.sub(pattern, bank_account_map[ba_str], anon_text, flags=re.IGNORECASE)
+    for idx, page in enumerate(sorted(pages, key=lambda p: p["page"])):
+        anon_text = safe_replace(page["text"], all_mappings)
         anonymized_pages.append({"page": page["page"], "text": anon_text})
+        if (idx + 1) % 10 == 0:
+            print(f"[LOG] Replaced entities in {idx + 1}/{len(pages)} pages", flush=True)
 
-    # Build display mapping
-    display_mapping = {}
-    for canonical, variants in org_groups:
-        ph = mapping.get(canonical) or mapping.get(variants[0])
-        if ph:
-            display_mapping[canonical] = ph
-    for canonical, variants in person_groups:
-        ph = mapping.get(canonical) or mapping.get(variants[0])
-        if ph:
-            display_mapping[canonical] = ph
-    display_mapping.update(addr_map)
-    display_mapping.update(date_map)
-    display_mapping.update(phone_map)
-    display_mapping.update(reg_id_map)
-    display_mapping.update(bank_account_map)
+    print(f"[LOG] Anonymization complete for {len(pages)} pages", flush=True)
 
+    display_mapping = dict(all_mappings)
 
     return {"pages": anonymized_pages, "mapping": display_mapping}
 
@@ -1108,11 +590,14 @@ def handler(event):
         for p in pages:
             if "page" not in p or "text" not in p:
                 return {"error": "Each page needs 'page' and 'text' fields"}
+
+        print(f"[LOG] Received request with {len(pages)} pages", flush=True)
         return anonymize_document(pages)
     except KeyError as e:
         return {"error": f"Missing field: {e}"}
     except Exception as e:
-
+        import traceback
+        print(f"[ERROR] {traceback.format_exc()}", flush=True)
         return {"error": str(e)}
 
 
