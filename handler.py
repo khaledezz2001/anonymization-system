@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 # ===============================
 # LOAD MODEL WITH vLLM
 # ===============================
-MODEL_PATH = "/app/models/Mistral-Nemo-Instruct-2407"
+MODEL_PATH = "/app/models/Qwen3.6-27B"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 
@@ -28,7 +28,7 @@ SAMPLING_PARAMS = SamplingParams(
     repetition_penalty=1.1,
 )
 
-print(f"[LOG] Mistral-Nemo-Instruct-2407 loaded via vLLM", flush=True)
+print(f"[LOG] Qwen3.6-27B loaded via vLLM", flush=True)
 
 
 # ===============================
@@ -202,7 +202,7 @@ def extract_entities_batch(chunks):
                 {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, phones, registration IDs, bank accounts, and emails:\n\n{chunk}"}
             ]
             prompt = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
             )
             prompts.append(prompt)
 
@@ -361,9 +361,14 @@ def dedup_substrings(items):
 # ===============================
 def _flexible_pattern(text_str):
     """Build a regex that matches text_str with flexible whitespace,
-    but NEVER matches in the middle of a word."""
+    but NEVER matches in the middle of a word.
+
+    Uses Unicode-aware word-character class so Cyrillic, Greek, and other
+    non-Latin scripts are handled correctly (Python's \w with re.UNICODE).
+    """
     escaped = re.escape(text_str)
     flexible = escaped.replace(r'\ ', r'\s+')
+    # Use (?<!\w) and (?!\w) — with re.UNICODE flag these match Cyrillic/Greek too
     return r'(?<!\w)' + flexible + r'(?!\w)'
 
 
@@ -379,7 +384,7 @@ def build_combined_pattern(mapping):
     for entity in sorted_entities:
         patterns.append(_flexible_pattern(entity))
     combined = '|'.join(f'({p})' for p in patterns)
-    return re.compile(combined, re.IGNORECASE), sorted_entities
+    return re.compile(combined, re.IGNORECASE | re.UNICODE), sorted_entities
 
 
 def safe_replace(text, mapping):
@@ -397,7 +402,7 @@ def safe_replace(text, mapping):
         for entity in sorted_entities:
             placeholder = mapping[entity]
             pattern = _flexible_pattern(entity)
-            text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
+            text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE | re.UNICODE)
         return text
 
     # For many entities, use single-pass replacement
@@ -406,13 +411,13 @@ def safe_replace(text, mapping):
     combined = '|'.join(f'({p})' for p in patterns)
 
     try:
-        compiled = re.compile(combined, re.IGNORECASE)
+        compiled = re.compile(combined, re.IGNORECASE | re.UNICODE)
     except re.error:
         # Fallback to sequential if regex is too complex
         for entity in sorted_entities:
             placeholder = mapping[entity]
             pattern = _flexible_pattern(entity)
-            text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
+            text = re.sub(pattern, placeholder, text, flags=re.IGNORECASE | re.UNICODE)
         return text
 
     # Build a lookup: for each match, find which entity it matched
@@ -433,7 +438,7 @@ def safe_replace(text, mapping):
             return entity_lower_map[normalized]
         # Fallback: find the entity that best matches
         for entity, placeholder in mapping.items():
-            if re.fullmatch(_flexible_pattern(entity), matched_text, re.IGNORECASE):
+            if re.fullmatch(_flexible_pattern(entity), matched_text, re.IGNORECASE | re.UNICODE):
                 return placeholder
         return matched_text  # no match — return unchanged
 
