@@ -8,27 +8,15 @@ from transformers import AutoTokenizer
 
 
 # ===============================
-# LOAD MODEL WITH vLLM
+# MODEL CONFIG (loaded inside __main__ guard)
 # ===============================
 MODEL_PATH = "/app/models/Qwen3.6-27B"
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-
-llm = LLM(
-    model=MODEL_PATH,
-    dtype="float16",
-    max_model_len=16384,        # Increased: long docs need more context room
-    tensor_parallel_size=int(os.environ.get("TP_SIZE", "1")),
-    gpu_memory_utilization=0.90,
-)
-
-SAMPLING_PARAMS = SamplingParams(
-    temperature=0,          # greedy decoding
-    max_tokens=4096,        # Increased: dense docs produce many entities
-    repetition_penalty=1.1,
-)
-
-print(f"[LOG] Qwen3.6-27B loaded via vLLM", flush=True)
+# These globals are set inside if __name__ == '__main__' before any
+# function is called.  Declared here so linters don't complain.
+tokenizer = None
+llm = None
+SAMPLING_PARAMS = None
 
 
 # ===============================
@@ -613,4 +601,28 @@ def handler(event):
         return {"error": str(e)}
 
 
-runpod.serverless.start({"handler": handler})
+if __name__ == '__main__':
+    # ===============================
+    # LOAD MODEL WITH vLLM
+    # (inside __main__ guard so vLLM's spawned child processes
+    #  don't re-run initialization)
+    # ===============================
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+
+    llm = LLM(
+        model=MODEL_PATH,
+        dtype="float16",
+        max_model_len=16384,        # long docs need more context room
+        tensor_parallel_size=int(os.environ.get("TP_SIZE", "1")),
+        gpu_memory_utilization=0.90,
+    )
+
+    SAMPLING_PARAMS = SamplingParams(
+        temperature=0,          # greedy decoding
+        max_tokens=4096,        # dense docs produce many entities
+        repetition_penalty=1.1,
+    )
+
+    print(f"[LOG] Qwen3.6-27B loaded via vLLM", flush=True)
+
+    runpod.serverless.start({"handler": handler})
