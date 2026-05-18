@@ -14,21 +14,21 @@ COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
 # ===============================
-# DOWNLOAD Qwen3.6-27B
+# DOWNLOAD openai/gpt-oss-20b
 # ===============================
 RUN python3 -u <<'EOF'
 from huggingface_hub import snapshot_download
 
-print("Downloading Qwen/Qwen3.6-27B...", flush=True)
+print("Downloading openai/gpt-oss-20b...", flush=True)
 
 snapshot_download(
-    repo_id="Qwen/Qwen3.6-27B",
-    local_dir="/app/models/Qwen3.6-27B",
+    repo_id="openai/gpt-oss-20b",
+    local_dir="/app/models/gpt-oss-20b",
     local_dir_use_symlinks=False,
     resume_download=True
 )
 
-print("Qwen3.6-27B download complete", flush=True)
+print("gpt-oss-20b download complete", flush=True)
 EOF
 
 WORKDIR /app
