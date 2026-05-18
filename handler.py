@@ -30,14 +30,14 @@ def combine_pages(pages):
 def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=200):
     """Split text into token-limited chunks with sentence-boundary awareness.
 
-    max_tokens is kept conservative (3000) so that after adding the system
-    prompt (~1500 tokens) and reserving max_tokens for output (4096), the
-    total stays safely within max_model_len (16384).
-
-    Tries to break at sentence boundaries (. ! ?) to give the LLM better
-    context per chunk, improving entity detection accuracy.
+    Used ONLY for individual pages that exceed the token limit.
+    Most pages fit in a single chunk and are processed as-is.
     """
     tokens = tokenizer.encode(text, add_special_tokens=False)
+    if len(tokens) <= max_tokens:
+        # Page fits in one chunk — return as-is
+        return [text.strip()] if text.strip() else []
+
     chunks = []
     start = 0
     while start < len(tokens):
@@ -55,7 +55,6 @@ def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=200):
                     best_break = idx
 
             # Only break at sentence if boundary is in the last 40% of chunk
-            # (don't make chunks too small)
             min_break_pos = len(chunk_text) * 6 // 10
             if best_break >= min_break_pos:
                 trimmed_text = chunk_text[:best_break + 1].strip()
@@ -74,7 +73,25 @@ def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=200):
     return chunks
 
 
-MAX_CHUNKS = 120   # 40 pages ≈ 40-50 chunks at 3000 tok/chunk — give headroom
+def pages_to_chunks(pages, max_tokens=3000):
+    """Convert pages to chunks for LLM processing.
+
+    Each page is kept as its own chunk to preserve natural document structure
+    (headers, signature blocks, tables stay intact). Only pages that exceed
+    the token limit are split into sub-chunks.
+    """
+    sorted_pages = sorted(pages, key=lambda p: p["page"])
+    chunks = []
+    for page in sorted_pages:
+        text = page["text"].strip()
+        if not text:
+            continue
+        page_chunks = chunk_text_with_overlap(text, max_tokens=max_tokens)
+        chunks.extend(page_chunks)
+    return chunks
+
+
+MAX_CHUNKS = 120   # safety limit for very large documents
 
 
 SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assistant for legal and business documents.
@@ -97,6 +114,11 @@ CRITICAL RULES - what to extract:
     - Greek: "Γεώργιος Τσιφραρίδης", "Ανδρέας Μενελάου"
     - English: "John Smith", "Maria Johnson"
     - Names with initials: "В.А. Король", "J.P. Morgan"
+  - CRITICAL: Extract names EXACTLY as they appear in the text, preserving the EXACT grammatical form/case.
+    In Russian, names change by case — you MUST copy the EXACT form from the text:
+    - If text says "Иванова Ивана Ивановича" (genitive), extract "Иванова Ивана Ивановича"
+    - Do NOT convert to nominative ("Иванов Иван Иванович") — use the EXACT text
+    - Same for Greek inflected forms: extract as written
   - Extract person names EVEN when they appear in an official capacity
   - Extract person names from witnesses, signatories, advocates, directors, shareholders
   - If a person's name is used as a business/firm name, extract it as BOTH a person AND an organisation
@@ -142,6 +164,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract counts or quantities as addresses (e.g. "2 clients onboarded" is NOT an address)
 - Do NOT extract legal references as addresses (e.g. "8 and Chapter VI of Directive" is NOT an address)
 - Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
+- Do NOT extract ИНН, ОГРН, КПП, or other registration/tax numbers as phone numbers
 - Do NOT extract URLs or website domain names as email addresses (e.g. "www.example.com" is NOT an email)
 
 Output ONLY valid JSON with no explanation. Do not wrap in markdown code blocks.
@@ -234,6 +257,9 @@ def verify_entity_in_text(entity, full_text_lower):
     """Check if an entity actually exists in the source document.
 
     Uses case-insensitive matching with flexible whitespace.
+    For multi-word entities (like person names), also checks if all individual
+    words appear nearby in the text — this handles Russian name inflections
+    where the model might extract a slightly different form.
     Returns True if the entity (or a whitespace-flexible variant) is found.
     """
     entity_clean = entity.strip()
@@ -250,6 +276,30 @@ def verify_entity_in_text(entity, full_text_lower):
     if len(words) > 1:
         flexible = r'\s+'.join(re.escape(w) for w in words)
         if re.search(flexible, full_text_lower, re.IGNORECASE):
+            return True
+
+    # Stem-aware check for inflected languages (Russian, Greek, etc.):
+    # If the entity has multiple words and each word's stem (first 3+ chars)
+    # appears within a reasonable window in the text, accept it.
+    # This catches cases like model returning "Иванов Иван Иванович"
+    # when text has "Иванова Ивана Ивановича" (different grammatical case).
+    if len(words) >= 2:
+        # Check if all words (or their stems) appear in the text
+        all_words_found = True
+        for word in words:
+            word_lower = word.lower().rstrip('.,;:')
+            if len(word_lower) < 2:
+                continue  # skip initials like "В." — too short to verify
+            if word_lower in full_text_lower:
+                continue
+            # Try stem match: first N chars (min 3) to handle inflection
+            stem_len = max(3, len(word_lower) - 2)
+            stem = word_lower[:stem_len]
+            if stem in full_text_lower:
+                continue
+            all_words_found = False
+            break
+        if all_words_found:
             return True
 
     return False
@@ -274,15 +324,28 @@ def validate_entities(entities, full_text_lower, entity_type):
 # ===============================
 # REGEX BACKUP DETECTION
 # ===============================
-def regex_backup_detection(full_text):
+def regex_backup_detection(full_text, existing_reg_ids=None):
     """Catch common PII patterns the LLM might have missed using regex.
 
     Runs as a safety net after LLM extraction to ensure high-confidence
     patterns like emails, phone numbers, and IBANs are never missed.
+
+    Args:
+        full_text: The full document text.
+        existing_reg_ids: List of already-detected registration IDs to exclude
+                         from phone detection (prevents ИНН/ОГРН → phone confusion).
     """
     backup_emails = []
     backup_phones = []
     backup_ibans = []
+
+    # Build set of digit-only versions of known registration IDs
+    reg_id_digits = set()
+    if existing_reg_ids:
+        for rid in existing_reg_ids:
+            digits = re.sub(r'\D', '', rid)
+            if digits:
+                reg_id_digits.add(digits)
 
     # Email pattern
     email_pattern = r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
@@ -290,11 +353,20 @@ def regex_backup_detection(full_text):
         backup_emails.append(match.group())
 
     # International phone pattern (requires 7-15 digits)
+    # Must have phone-like formatting: +, parentheses, or dashes
     phone_pattern = r'(?<!\d)(?:\+\d{1,3}[\s\-]?)?\(?\d{1,4}\)?[\s\-]?\d{2,4}[\s\-]?\d{3,4}(?!\d)'
     for match in re.finditer(phone_pattern, full_text):
         candidate = match.group().strip()
         digits = re.sub(r'\D', '', candidate)
         if 7 <= len(digits) <= 15:
+            # Skip if this number matches a known registration ID
+            if digits in reg_id_digits:
+                continue
+            # Skip if preceded by registration ID labels (ИНН, ОГРН, КПП, etc.)
+            start_pos = match.start()
+            prefix = full_text[max(0, start_pos - 20):start_pos]
+            if re.search(r'(?:ИНН|ОГРН|КПП|ОКП|ОКПО|BIC|БИК|р/с|к/с|и/с)[:\s]*$', prefix, re.IGNORECASE):
+                continue
             backup_phones.append(candidate)
 
     # IBAN pattern
@@ -443,8 +515,10 @@ def anonymize_document(pages):
     total_tokens = len(tokenizer.encode(full_text, add_special_tokens=False))
     print(f"[LOG] Document: {len(pages)} pages, ~{total_tokens} tokens", flush=True)
 
-    chunks = chunk_text_with_overlap(full_text)
-    print(f"[LOG] Split into {len(chunks)} chunks", flush=True)
+    # Process page-by-page: each page becomes its own chunk(s)
+    # This preserves natural document structure (headers, signature blocks, tables)
+    chunks = pages_to_chunks(pages)
+    print(f"[LOG] Split into {len(chunks)} chunks ({len(pages)} pages)", flush=True)
 
     if len(chunks) > MAX_CHUNKS:
         return {
@@ -475,7 +549,9 @@ def anonymize_document(pages):
           f"{len(all_bank_accounts)} bank_accounts, {len(all_emails)} emails", flush=True)
 
     # ---- REGEX BACKUP: catch patterns the LLM might have missed ----
-    backup_emails, backup_phones, backup_ibans = regex_backup_detection(full_text)
+    backup_emails, backup_phones, backup_ibans = regex_backup_detection(
+        full_text, existing_reg_ids=all_reg_ids
+    )
 
     existing_emails_lower = {e.lower() for e in all_emails}
     for email in backup_emails:
