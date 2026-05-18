@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 # ===============================
 # MODEL CONFIG (loaded inside __main__ guard)
 # ===============================
-MODEL_PATH = "/app/models/Qwen3.6-27B"
+MODEL_PATH = "/app/models/gpt-oss-20b"
 
 # These globals are set inside if __name__ == '__main__' before any
 # function is called.  Declared here so linters don't complain.
@@ -197,9 +197,11 @@ Output ONLY valid JSON with no explanation. Do not wrap in markdown code blocks.
 
 
 def strip_thinking(text):
-    """Remove <think>...</think> blocks from model output (safety net)."""
+    """Remove <think>...</think> blocks and harmony analysis channel tokens from model output."""
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
     text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL)
+    # Strip harmony-format analysis/commentary channel markers if present
+    text = re.sub(r'<\|start\|>.*?<\|end\|>', '', text, flags=re.DOTALL)
     return text.strip()
 
 
@@ -221,18 +223,15 @@ def extract_entities_batch(chunks):
 
         print(f"[LOG] Processing chunks {batch_start + 1}-{batch_end} of {total_chunks}", flush=True)
 
-        prompts = []
+        conversations = []
         for chunk in batch_chunks:
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, phones, registration IDs, bank accounts, and emails:\n\n{chunk}"}
             ]
-            prompt = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-            )
-            prompts.append(prompt)
+            conversations.append(messages)
 
-        outputs = llm.generate(prompts, SAMPLING_PARAMS)
+        outputs = llm.chat(conversations, SAMPLING_PARAMS)
 
         for output in outputs:
             raw = output.outputs[0].text.strip()
@@ -702,7 +701,7 @@ if __name__ == '__main__':
 
     llm = LLM(
         model=MODEL_PATH,
-        dtype="float16",
+        dtype="auto",               # let vLLM pick optimal dtype (MXFP4 MoE weights)
         max_model_len=16384,        # long docs need more context room
         tensor_parallel_size=int(os.environ.get("TP_SIZE", "1")),
         gpu_memory_utilization=0.90,
@@ -714,6 +713,6 @@ if __name__ == '__main__':
         repetition_penalty=1.1,
     )
 
-    print(f"[LOG] Qwen3.6-27B loaded via vLLM", flush=True)
+    print(f"[LOG] gpt-oss-20b loaded via vLLM", flush=True)
 
     runpod.serverless.start({"handler": handler})
