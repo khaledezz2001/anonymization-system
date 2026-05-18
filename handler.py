@@ -129,11 +129,25 @@ CRITICAL RULES - what to extract:
   - A company must be a specific legal entity (e.g., "Altus Citadel Corporate Services Limited")
 - DATES: Only specific calendar dates, like "01/09/2015", "24th of July, 2015"
   - Do NOT extract section or article numbers as dates (e.g. "2.2.11", "3.1.5" are section numbers, NOT dates)
-- ADDRESSES: ONLY physical street/postal addresses with specific location details
-  - An address MUST contain a street name, building number, postcode, or similar location identifier
-  - Example addresses: "82 Akropoleos, 2nd floor, 1012 Acropolis, Cyprus", "191 ATHALASSIS AVE."
-  - Extract addresses from EVERYWHERE: signature pages, witness sections, headers, body text
-  - Addresses can be in any format and any language
+- ADDRESSES: Extract ALL physical street/postal addresses with location details
+  - An address contains a street name, building/apartment number, postcode, city, or similar location identifier
+  - CRITICAL: Extract the FULL address as a SINGLE string, including ALL parts:
+    street name + number + apartment/floor + postal code + city + country
+  - If an address spans multiple lines, combine ALL lines into one address string
+  - Example addresses you MUST catch:
+    - "Mome Kapora 12, apartment 11" — street + building + apartment
+    - "1100 Belgrade" — postal code + city (often part of a multi-line address)
+    - "Mome Kapora 12, apartment 11, 1100 Belgrade" — full combined address
+    - "11, N. Kazantzaki, 2460 Nicosia, Cyprus" — number + street + postal code + city + country
+    - "Eleftherias 5, 2679 Mammari, Nicosia" — street + number + postal code + town + district
+    - "82 Akropoleos, 2nd floor, 1012 Acropolis, Cyprus" — full address with floor
+    - "191 ATHALASSIS AVE." — street address
+    - Russian addresses: "ул. Моме Капора 12, кв. 11, 1100 Белград" — street + apt + postal + city
+    - Addresses with "apartment", "apt.", "кв.", "floor", "офис", "этаж"
+  - Extract addresses from EVERYWHERE: signature pages, witness sections, headers, footers, body text, company details
+  - Addresses can be in ANY format and ANY language (English, Greek, Russian, Serbian, etc.)
+  - When a postal code + city appears on a separate line below a street address, combine them into ONE address
+  - Even PARTIAL addresses are PII: "Eleftherias 5" alone is an address, "2679 Mammari" alone is an address
 - PHONES: Phone and fax numbers, like "+357 22 315161", "22314641"
 - REGISTRATION IDS: Any company or entity identification numbers
   - Examples: "H.E.107777", "HE317807", "HRB 12345", "Company No. 12345678", "Reg. No. 123456", "Tax ID 123456"
@@ -158,11 +172,12 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract bare years as dates: "2014" alone is NOT a date
 - Do NOT extract quarter references as dates: "Q2 2024" alone is a period, not a specific date
 - Do NOT extract section/article numbers as dates: "2.2.11", "3.1.5" are NOT dates
-- Do NOT extract sentence fragments as addresses
+- Do NOT extract sentence fragments as addresses (but DO extract partial street addresses)
 - Do NOT extract page numbers or section headers as addresses (e.g. "4 INTRODUCTION" is NOT an address)
 - Do NOT extract duration phrases as addresses (e.g. "1 year for high risk customers" is NOT an address)
 - Do NOT extract counts or quantities as addresses (e.g. "2 clients onboarded" is NOT an address)
 - Do NOT extract legal references as addresses (e.g. "8 and Chapter VI of Directive" is NOT an address)
+- REMEMBER: When in doubt about whether something is an address, extract it. Missing an address is WORSE than a false positive.
 - Do NOT extract bank account numbers, IBAN codes, or reference numbers as phone numbers
 - Do NOT extract ИНН, ОГРН, КПП, or other registration/tax numbers as phone numbers
 - Do NOT extract URLs or website domain names as email addresses (e.g. "www.example.com" is NOT an email)
