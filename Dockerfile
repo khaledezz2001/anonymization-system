@@ -1,25 +1,38 @@
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
-
-# Qwen3.6-27B — dense 27B model, superior multilingual NER for Russian, Greek, etc.
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV HF_HUB_ENABLE_HF_TRANSFER=1
+ENV HF_HOME=/models
+ENV HF_HUB_ENABLE_HF_TRANSFER=0
 ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
 # Remove pre-installed torchvision/torchaudio — not needed for text-only LLM inference
 RUN pip uninstall -y torchvision torchaudio 2>/dev/null || true
 
-# Install dependencies (includes vLLM for inference)
+# Install vLLM + Python deps (torch 2.8.0 + CUDA 12.8.1 in base image)
 COPY requirements.txt /requirements.txt
-RUN pip install --no-cache-dir -r /requirements.txt hf_transfer
+RUN pip install --no-cache-dir -r /requirements.txt
 
-# Download model weights into the image (no network volume needed)
-RUN python -c "\
-from huggingface_hub import snapshot_download; \
-snapshot_download('Qwen/Qwen3.6-27B', local_dir='/app/models/Qwen3.6-27B', local_dir_use_symlinks=False)"
+# ===============================
+# DOWNLOAD Qwen3.6-27B
+# ===============================
+RUN python3 -u <<'EOF'
+from huggingface_hub import snapshot_download
+
+print("Downloading Qwen/Qwen3.6-27B...", flush=True)
+
+snapshot_download(
+    repo_id="Qwen/Qwen3.6-27B",
+    local_dir="/app/models/Qwen3.6-27B",
+    local_dir_use_symlinks=False,
+    resume_download=True
+)
+
+print("Qwen3.6-27B download complete", flush=True)
+EOF
 
 WORKDIR /app
 COPY handler.py /app/handler.py
 
-CMD ["python3", "-u", "handler.py"]
+ENTRYPOINT ["python3"]
+CMD ["-u", "handler.py"]
