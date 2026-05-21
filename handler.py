@@ -706,6 +706,7 @@ if __name__ == '__main__':
         max_model_len=16384,        # long docs need more context room
         tensor_parallel_size=int(os.environ.get("TP_SIZE", "1")),
         gpu_memory_utilization=0.90,
+        enforce_eager=True,
     )
 
     SAMPLING_PARAMS = SamplingParams(
