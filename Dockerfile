@@ -6,45 +6,29 @@ ENV HF_HOME=/models
 ENV HF_HUB_ENABLE_HF_TRANSFER=0
 ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# ===== NEW: Prevent JIT compilation issues =====
-ENV VLLM_GDN_PREFILL_BACKEND=triton
-ENV FLASHINFER_DISABLE_JIT=1
-
+# Remove pre-installed torchvision/torchaudio — not needed for text-only LLM inference
 RUN pip uninstall -y torchvision torchaudio 2>/dev/null || true
 
+# Install vLLM + Python deps (torch 2.8.0 + CUDA 12.8.1 in base image)
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
+# ===============================
+# DOWNLOAD Qwen3.6-27B
+# ===============================
 RUN python3 -u <<'EOF'
 from huggingface_hub import snapshot_download
-print("Downloading openai/gpt-oss-20b...", flush=True)
+
+print("Downloading Qwen/Qwen3.6-27B...", flush=True)
+
 snapshot_download(
-    repo_id="openai/gpt-oss-20b",
-    local_dir="/app/models/gpt-oss-20b",
+    repo_id="Qwen/Qwen3.6-27B",
+    local_dir="/app/models/Qwen3.6-27B",
     local_dir_use_symlinks=False,
     resume_download=True
 )
-print("Download complete", flush=True)
-EOF
 
-# ===== NEW: Pre-warm torch.compile cache =====
-# This bakes the compilation artifacts into the image
-ENV VLLM_TORCH_COMPILE_CACHE_DIR=/root/.cache/vllm/torch_compile_cache
-RUN python3 -u <<'EOF'
-import torch
-from vllm import LLM, SamplingParams
-
-print("Pre-warming torch.compile cache...")
-llm = LLM(
-    model="/app/models/gpt-oss-20b",
-    dtype="auto",
-    max_model_len=512,  # Shorter is fine for cache warmup
-    gpu_memory_utilization=0.90,
-)
-_ = llm.generate("Warmup", SamplingParams(max_tokens=5))
-print("Warmup complete")
-del llm
-torch.cuda.empty_cache()
+print("Qwen3.6-27B download complete", flush=True)
 EOF
 
 WORKDIR /app
