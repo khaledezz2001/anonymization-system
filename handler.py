@@ -73,25 +73,48 @@ def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=200):
     return chunks
 
 
-def pages_to_chunks(pages, max_tokens=3000):
+def pages_to_chunks(pages, max_tokens=3000, pages_per_chunk=2):
     """Convert pages to chunks for LLM processing.
 
-    Each page is kept as its own chunk to preserve natural document structure
-    (headers, signature blocks, tables stay intact). Only pages that exceed
-    the token limit are split into sub-chunks.
+    Groups exactly `pages_per_chunk` adjacent pages into each chunk.
+    Only pages that individually exceed max_tokens are split into sub-chunks.
     """
     sorted_pages = sorted(pages, key=lambda p: p["page"])
     chunks = []
+    current_texts = []
+
     for page in sorted_pages:
         text = page["text"].strip()
         if not text:
             continue
-        page_chunks = chunk_text_with_overlap(text, max_tokens=max_tokens)
-        chunks.extend(page_chunks)
+
+        page_tokens = len(tokenizer.encode(text, add_special_tokens=False))
+
+        # If a single page exceeds the limit, flush what we have,
+        # then split this oversized page on its own.
+        if page_tokens > max_tokens:
+            if current_texts:
+                chunks.append("\n\n".join(current_texts))
+                current_texts = []
+            page_chunks = chunk_text_with_overlap(text, max_tokens=max_tokens)
+            chunks.extend(page_chunks)
+            continue
+
+        current_texts.append(text)
+
+        # Flush every pages_per_chunk pages
+        if len(current_texts) >= pages_per_chunk:
+            chunks.append("\n\n".join(current_texts))
+            current_texts = []
+
+    # Flush remaining pages
+    if current_texts:
+        chunks.append("\n\n".join(current_texts))
+
     return chunks
 
 
-MAX_CHUNKS = 120   # safety limit for very large documents
+MAX_CHUNKS = 300   # safety limit for very large documents
 
 
 SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assistant for legal and business documents.
@@ -706,7 +729,6 @@ if __name__ == '__main__':
         max_model_len=16384,        # long docs need more context room
         tensor_parallel_size=int(os.environ.get("TP_SIZE", "1")),
         gpu_memory_utilization=0.90,
-        enforce_eager=True,
     )
 
     SAMPLING_PARAMS = SamplingParams(
