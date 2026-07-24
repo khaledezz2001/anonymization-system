@@ -73,48 +73,25 @@ def chunk_text_with_overlap(text, max_tokens=3000, overlap_tokens=200):
     return chunks
 
 
-def pages_to_chunks(pages, max_tokens=3000, pages_per_chunk=2):
+def pages_to_chunks(pages, max_tokens=3000):
     """Convert pages to chunks for LLM processing.
 
-    Groups exactly `pages_per_chunk` adjacent pages into each chunk.
-    Only pages that individually exceed max_tokens are split into sub-chunks.
+    Each page is kept as its own chunk to preserve natural document structure
+    (headers, signature blocks, tables stay intact). Only pages that exceed
+    the token limit are split into sub-chunks.
     """
     sorted_pages = sorted(pages, key=lambda p: p["page"])
     chunks = []
-    current_texts = []
-
     for page in sorted_pages:
         text = page["text"].strip()
         if not text:
             continue
-
-        page_tokens = len(tokenizer.encode(text, add_special_tokens=False))
-
-        # If a single page exceeds the limit, flush what we have,
-        # then split this oversized page on its own.
-        if page_tokens > max_tokens:
-            if current_texts:
-                chunks.append("\n\n".join(current_texts))
-                current_texts = []
-            page_chunks = chunk_text_with_overlap(text, max_tokens=max_tokens)
-            chunks.extend(page_chunks)
-            continue
-
-        current_texts.append(text)
-
-        # Flush every pages_per_chunk pages
-        if len(current_texts) >= pages_per_chunk:
-            chunks.append("\n\n".join(current_texts))
-            current_texts = []
-
-    # Flush remaining pages
-    if current_texts:
-        chunks.append("\n\n".join(current_texts))
-
+        page_chunks = chunk_text_with_overlap(text, max_tokens=max_tokens)
+        chunks.extend(page_chunks)
     return chunks
 
 
-MAX_CHUNKS = 300   # safety limit for very large documents
+MAX_CHUNKS = 120   # safety limit for very large documents
 
 
 SYSTEM_PROMPT = """You are a multilingual named entity recognition (NER) assistant for legal and business documents.
@@ -129,6 +106,7 @@ Extract ALL of the following from the text:
 6. Registration IDs (company registration numbers, tax IDs)
 7. Bank accounts (IBAN numbers, bank account numbers, SWIFT/BIC codes)
 8. Email addresses (email addresses of individuals or organizations)
+9. Passport numbers (passport numbers, national identity numbers, travel document numbers)
 
 CRITICAL RULES - what to extract:
 - PERSONS: Only real human names, like "John Smith", "Andreas Menelaou"
@@ -180,6 +158,9 @@ CRITICAL RULES - what to extract:
 - EMAILS: Email addresses of individuals or organizations
   - Examples: "john@example.com", "info@company.com", "maria.smith@org.co.uk"
   - Extract email addresses found anywhere in the document
+- PASSPORTS: Passport numbers, national ID numbers, driver's license numbers, or travel document numbers
+  - Examples: "N1234567", "C12345678", "012345679", "A-98765432"
+  - Extract passport numbers found in documents in any format
 
 CRITICAL RULES - what NOT to extract:
 - Do NOT extract role titles as persons: Chairman, Director, Secretary, Landlord, Tenant
@@ -195,6 +176,7 @@ CRITICAL RULES - what NOT to extract:
 - Do NOT extract bare years as dates: "2014" alone is NOT a date
 - Do NOT extract quarter references as dates: "Q2 2024" alone is a period, not a specific date
 - Do NOT extract section/article numbers as dates: "2.2.11", "3.1.5" are NOT dates
+- Do NOT extract section/article numbers as passport numbers
 - Do NOT extract sentence fragments as addresses (but DO extract partial street addresses)
 - Do NOT extract page numbers or section headers as addresses (e.g. "4 INTRODUCTION" is NOT an address)
 - Do NOT extract duration phrases as addresses (e.g. "1 year for high risk customers" is NOT an address)
@@ -215,7 +197,8 @@ Output ONLY valid JSON with no explanation. Do not wrap in markdown code blocks.
   "phones": ["phone1", "phone2"],
   "registration_ids": ["H.E.107777"],
   "bank_accounts": ["CY17 0020 0128 0000 0012 0052 7600"],
-  "emails": ["email1@example.com"]
+  "emails": ["email1@example.com"],
+  "passports": ["N1234567"]
 }"""
 
 
@@ -226,7 +209,7 @@ def strip_thinking(text):
     return text.strip()
 
 
-def extract_entities_batch(chunks):
+def extract_entities_batch(chunks, system_prompt=None, user_prompt=None):
     """Extract entities from all chunks using vLLM batch inference.
 
     Processes chunks in micro-batches of BATCH_SIZE to avoid GPU KV-cache
@@ -234,8 +217,12 @@ def extract_entities_batch(chunks):
     """
     BATCH_SIZE = 8  # Process 8 chunks at a time to avoid KV-cache OOM
 
+    effective_prompt = system_prompt if system_prompt else SYSTEM_PROMPT
+    default_user_prompt = "Extract all entities specified in the system prompt (persons, organizations, dates, addresses, phones, registration IDs, bank accounts, emails, passports):"
+
     all_persons, all_orgs, all_dates = [], [], []
-    all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails = [], [], [], [], []
+    all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails, all_passports = [], [], [], [], [], [], []
+    custom_entities = []
 
     total_chunks = len(chunks)
     for batch_start in range(0, total_chunks, BATCH_SIZE):
@@ -246,9 +233,17 @@ def extract_entities_batch(chunks):
 
         prompts = []
         for chunk in batch_chunks:
+            if user_prompt and isinstance(user_prompt, str) and user_prompt.strip():
+                if "{chunk}" in user_prompt:
+                    user_content = user_prompt.replace("{chunk}", chunk)
+                else:
+                    user_content = f"{user_prompt.strip()}\n\n{chunk}"
+            else:
+                user_content = f"{default_user_prompt}\n\n{chunk}"
+
             messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Extract all persons, organizations, dates, addresses, phones, registration IDs, bank accounts, and emails:\n\n{chunk}"}
+                {"role": "system", "content": effective_prompt},
+                {"role": "user", "content": user_content}
             ]
             prompt = tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
@@ -267,14 +262,24 @@ def extract_entities_batch(chunks):
                     json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
                 result = json.loads(json_match.group()) if json_match else json.loads(cleaned)
 
-                all_persons.extend([p.strip() for p in result.get("persons", []) if p and p.strip()])
-                all_orgs.extend([o.strip() for o in result.get("organizations", []) if o and o.strip()])
-                all_dates.extend([d.strip() for d in result.get("dates", []) if d and d.strip()])
-                all_addresses.extend([a.strip() for a in result.get("addresses", []) if a and a.strip()])
-                all_phones.extend([p.strip() for p in result.get("phones", []) if p and p.strip()])
-                all_reg_ids.extend([r.strip() for r in result.get("registration_ids", []) if r and r.strip()])
-                all_bank_accounts.extend([b.strip() for b in result.get("bank_accounts", []) if b and b.strip()])
-                all_emails.extend([e.strip() for e in result.get("emails", []) if e and e.strip()])
+                all_persons.extend([p.strip() for p in result.get("persons", []) if p and isinstance(p, str) and p.strip()])
+                all_orgs.extend([o.strip() for o in result.get("organizations", []) if o and isinstance(o, str) and o.strip()])
+                all_dates.extend([d.strip() for d in result.get("dates", []) if d and isinstance(d, str) and d.strip()])
+                all_addresses.extend([a.strip() for a in result.get("addresses", []) if a and isinstance(a, str) and a.strip()])
+                all_phones.extend([p.strip() for p in result.get("phones", []) if p and isinstance(p, str) and p.strip()])
+                all_reg_ids.extend([r.strip() for r in result.get("registration_ids", []) if r and isinstance(r, str) and r.strip()])
+                all_bank_accounts.extend([b.strip() for b in result.get("bank_accounts", []) if b and isinstance(b, str) and b.strip()])
+                all_emails.extend([e.strip() for e in result.get("emails", []) if e and isinstance(e, str) and e.strip()])
+
+                passports = result.get("passports", []) or result.get("passport_numbers", [])
+                if isinstance(passports, list):
+                    all_passports.extend([p.strip() for p in passports if p and isinstance(p, str) and p.strip()])
+
+                # Support any custom entity list keys if provided by a custom system prompt
+                standard_keys = {"persons", "organizations", "dates", "addresses", "phones", "registration_ids", "bank_accounts", "emails", "passports", "passport_numbers"}
+                for k, v in result.items():
+                    if k not in standard_keys and isinstance(v, list):
+                        custom_entities.extend([item.strip() for item in v if item and isinstance(item, str) and item.strip()])
             except (json.JSONDecodeError, AttributeError) as e:
                 print(f"[WARN] Failed to parse chunk output: {e}", flush=True)
                 print(f"[WARN] Raw output was: {raw[:500]}", flush=True)
@@ -282,10 +287,10 @@ def extract_entities_batch(chunks):
     print(f"[LOG] Entity extraction complete. Found: {len(all_persons)} persons, "
           f"{len(all_orgs)} orgs, {len(all_dates)} dates, {len(all_addresses)} addresses, "
           f"{len(all_phones)} phones, {len(all_reg_ids)} reg_ids, {len(all_bank_accounts)} bank_accounts, "
-          f"{len(all_emails)} emails",
+          f"{len(all_emails)} emails, {len(all_passports)} passports, {len(custom_entities)} custom_entities",
           flush=True)
 
-    return all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails
+    return all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails, all_passports, custom_entities
 
 
 # ===============================
@@ -547,7 +552,7 @@ def safe_replace(text, mapping):
 # ===============================
 # MAIN ANONYMIZATION PIPELINE
 # ===============================
-def anonymize_document(pages):
+def anonymize_document(pages, system_prompt=None, user_prompt=None):
 
     full_text = combine_pages(pages)
     total_tokens = len(tokenizer.encode(full_text, add_special_tokens=False))
@@ -567,8 +572,8 @@ def anonymize_document(pages):
         }
 
     # Batch inference: process chunks in micro-batches via vLLM
-    all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails = \
-        extract_entities_batch(chunks)
+    all_persons, all_orgs, all_dates, all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails, all_passports, custom_entities = \
+        extract_entities_batch(chunks, system_prompt=system_prompt, user_prompt=user_prompt)
 
     # ---- ANTI-HALLUCINATION: verify every entity exists in the source text ----
     full_text_lower = full_text.lower()
@@ -580,11 +585,14 @@ def anonymize_document(pages):
     all_reg_ids = validate_entities(all_reg_ids, full_text_lower, "registration_ids")
     all_bank_accounts = validate_entities(all_bank_accounts, full_text_lower, "bank_accounts")
     all_emails = validate_entities(all_emails, full_text_lower, "emails")
+    all_passports = validate_entities(all_passports, full_text_lower, "passports")
+    custom_entities = validate_entities(custom_entities, full_text_lower, "custom_entities")
 
     print(f"[LOG] After validation: {len(all_persons)} persons, {len(all_orgs)} orgs, "
           f"{len(all_dates)} dates, {len(all_addresses)} addresses, "
           f"{len(all_phones)} phones, {len(all_reg_ids)} reg_ids, "
-          f"{len(all_bank_accounts)} bank_accounts, {len(all_emails)} emails", flush=True)
+          f"{len(all_bank_accounts)} bank_accounts, {len(all_emails)} emails, "
+          f"{len(all_passports)} passports, {len(custom_entities)} custom_entities", flush=True)
 
     # ---- REGEX BACKUP: catch patterns the LLM might have missed ----
     backup_emails, backup_phones, backup_ibans = regex_backup_detection(
@@ -621,11 +629,14 @@ def anonymize_document(pages):
     unique_reg_ids = dedup_substrings(dedup_list(all_reg_ids))
     unique_bank_accounts = dedup_substrings(dedup_list(all_bank_accounts))
     unique_emails = dedup_substrings(dedup_list(all_emails))
+    unique_passports = dedup_substrings(dedup_list(all_passports))
+    unique_custom = dedup_substrings(dedup_list(custom_entities))
 
     print(f"[LOG] After dedup: {len(unique_persons)} persons, {len(unique_orgs)} orgs, "
           f"{len(unique_dates)} dates, {len(unique_addresses)} addresses, "
           f"{len(unique_phones)} phones, {len(unique_reg_ids)} reg_ids, "
-          f"{len(unique_bank_accounts)} bank_accounts, {len(unique_emails)} emails", flush=True)
+          f"{len(unique_bank_accounts)} bank_accounts, {len(unique_emails)} emails, "
+          f"{len(unique_passports)} passports, {len(unique_custom)} custom_entities", flush=True)
 
     # Build mapping ordered by first appearance in the document
     def find_first_pos(token):
@@ -666,6 +677,14 @@ def anonymize_document(pages):
     for i, e in enumerate(sorted(unique_emails, key=find_first_pos), 1):
         email_map[e] = f"[EMAIL{i}]"
 
+    passport_map = {}
+    for i, pass_num in enumerate(sorted(unique_passports, key=find_first_pos), 1):
+        passport_map[pass_num] = f"[PASSPORT{i}]"
+
+    custom_map = {}
+    for i, c in enumerate(sorted(unique_custom, key=find_first_pos), 1):
+        custom_map[c] = f"[ENTITY{i}]"
+
     # Combine all mappings for replacement
     all_mappings = {}
     all_mappings.update(mapping)
@@ -675,6 +694,8 @@ def anonymize_document(pages):
     all_mappings.update(reg_id_map)
     all_mappings.update(bank_account_map)
     all_mappings.update(email_map)
+    all_mappings.update(passport_map)
+    all_mappings.update(custom_map)
 
     print(f"[LOG] Total entities to replace: {len(all_mappings)}", flush=True)
 
@@ -705,8 +726,11 @@ def handler(event):
             if "page" not in p or "text" not in p:
                 return {"error": "Each page needs 'page' and 'text' fields"}
 
-        print(f"[LOG] Received request with {len(pages)} pages", flush=True)
-        return anonymize_document(pages)
+        system_prompt = event["input"].get("system_prompt", None)
+        user_prompt = event["input"].get("user_prompt", None)
+
+        print(f"[LOG] Received request with {len(pages)} pages (custom system prompt: {bool(system_prompt)}, custom user prompt: {bool(user_prompt)})", flush=True)
+        return anonymize_document(pages, system_prompt=system_prompt, user_prompt=user_prompt)
     except KeyError as e:
         return {"error": f"Missing field: {e}"}
     except Exception as e:
