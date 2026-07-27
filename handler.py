@@ -221,7 +221,7 @@ def extract_entities_batch(chunks, system_prompt=None, user_prompt=None):
     default_user_prompt = "Extract all entities specified in the system prompt (persons, organizations, dates, addresses, phones, registration IDs, bank accounts, emails, passports):"
 
     all_persons, all_orgs, all_dates = [], [], []
-    all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails, all_passports = [], [], [], [], [], [], []
+    all_addresses, all_phones, all_reg_ids, all_bank_accounts, all_emails, all_passports = [], [], [], [], [], []
     custom_entities = []
 
     total_chunks = len(chunks)
